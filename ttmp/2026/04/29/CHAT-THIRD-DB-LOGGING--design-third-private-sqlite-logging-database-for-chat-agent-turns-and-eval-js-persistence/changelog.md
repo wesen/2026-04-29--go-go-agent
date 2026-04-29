@@ -54,3 +54,25 @@ Completed task 12 CLI flag and runner hook wiring; verified chat help lists log 
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — CLI flags
 
+
+## 2026-04-29
+
+Completed task 13 test coverage for schema creation, replapi eval persistence, turn snapshots, serialization errors, and JS non-exposure.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool_test.go — Eval success/error/serialization persistence tests
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/logdb_test.go — Schema and eval session setup test
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/privacy_test.go — Private table non-exposure test
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/turn_persister_test.go — Turn snapshot persistence test
+
+
+## 2026-04-29
+
+Completed task 13 persistence/privacy test coverage (commit 7504e6c32329943ee641b93a3b195ce710a18342).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/privacy_test.go — JS non-exposure coverage
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/turn_persister_test.go — Turn snapshot coverage
+

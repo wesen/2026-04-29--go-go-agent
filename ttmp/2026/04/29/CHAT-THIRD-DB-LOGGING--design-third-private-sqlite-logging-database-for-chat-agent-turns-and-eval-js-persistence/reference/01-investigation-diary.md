@@ -276,3 +276,64 @@ The user-facing CLI now exposes `--log-db`, `--log-db-strict`, `--no-log-db`, an
 
 ### Technical details
 - Validation command: `go run ./cmd/chat --help | rg -- '--log-db|--no-log-db|--eval-timeout'`.
+
+## Step 5: Complete log DB unit coverage
+
+I completed task 13 by expanding the log DB test suite beyond the initial schema check. The new tests cover actual turn snapshot persistence, successful replapi-backed eval persistence, JavaScript error payload persistence, non-JSON/circular result handling, and the privacy invariant that private log tables are not visible through JavaScript-facing schemas.
+
+The broader package test set passes with the new coverage, giving a stronger checkpoint before attempting a live model smoke test.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 1)
+
+**Assistant interpretation:** Continue task-by-task implementation and add validation before moving to final smoke testing.
+
+**Inferred user intent:** Make the implementation safe to review and reduce the chance of hidden persistence/privacy regressions.
+
+**Commit (code):** 7504e6c32329943ee641b93a3b195ce710a18342 — "Cover chat log persistence and privacy"
+
+### What I did
+- Added `internal/logdb/turn_persister_test.go` for turn snapshot persistence into `turns` and `turn_block_membership`.
+- Added `internal/logdb/privacy_test.go` to ensure JavaScript-visible schemas do not expose private tables.
+- Extended `internal/logdb/eval_tool_test.go` with circular-result serialization error coverage.
+- Ran `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.
+- Checked docmgr task 13.
+
+### Why
+- The private DB contains sensitive data and must not leak through `inputDB` or `outputDB`.
+- The turn store path and eval store path both need coverage because they are initialized into the same SQLite file.
+- The replapi result conversion needs error-path tests, not just success-path tests.
+
+### What worked
+- Turn snapshots save normalized turn/block membership rows.
+- Replapi eval tests continue to write repldb and correlation rows.
+- The privacy test confirms only `inputDB`/`outputDB` schemas are visible to JavaScript.
+
+### What didn't work
+- The first privacy test returned complete `schema()` objects and failed with:
+  - `eval_js result was not valid JSON: invalid character 'â' in string escape code`
+- The cause appears to be replsession preview formatting/truncation for returned Go object shapes from `schema()`.
+- I changed the test to return only `inputDB.schema().tables` and `outputDB.schema().tables`, which is smaller and directly relevant to the privacy assertion.
+- The first turn test queried `turns.phase`, but phase lives in `turn_block_membership`, not `turns`; I fixed the query to check the turn row separately from membership rows.
+
+### What I learned
+- Replsession result previews are exact enough for typical JSON values but can still surprise tests when returning host object shapes; result conversion deserves continued attention.
+- Pinocchio chatstore stores phase per snapshot membership row, while the main `turns` row is keyed by conversation/session/turn.
+
+### What was tricky to build
+- The privacy assertion had to avoid accidentally testing replsession preview behavior instead of the actual security boundary. Returning the table arrays keeps the test focused on whether private table names leak.
+
+### What warrants a second pair of eyes
+- Review whether the result converter should avoid preview strings entirely by reading a known global via `replapi.WithRuntime` after evaluation.
+- Review the turn snapshot test to ensure it matches the intended chatstore schema semantics.
+
+### What should be done in the future
+- Add a live smoke test that queries the generated `/tmp/chat-log.sqlite` for all expected row families.
+
+### Code review instructions
+- Review the four tests in `internal/logdb` together.
+- Validate with `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.
+
+### Technical details
+- Successful validation command: `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.
