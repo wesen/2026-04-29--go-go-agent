@@ -1,0 +1,43 @@
+go run ./cmd/chat --profile gpt-5-nano-low
+2026-04-29--go-go-agent on  main via 🐹 v1.26.1
+✦ ❯ go run ./cmd/chat --profile gpt-5-nano-low
+chat REPL. Type :help for commands, :quit to exit.
+> Use eval_js to list the embedded help entries, then summarize the available AP
+Is in one paragraph.
+
+system: You are the chat agent.
+You have exactly one tool available: eval_js.
+Use eval_js when the user asks about the embedded chat help entries, the JavaScr
+ipt runtime APIs, inputDB/outputDB, or implementation details captured in the em
+bedded help database.
+The eval_js runtime exposes inputDB as a read-only SQLite facade over embedded h
+elp entries and outputDB as writable scratch space.
+Prefer small SELECT queries against inputDB.docs or inputDB.sections, and cite h
+elp slugs/titles when answering.
+user: Use eval_js to list the embedded help entries, then summarize the availabl
+e APIs in one paragraph.
+reasoning: <encrypted content>
+tool_call: name=eval_js id=call_7L2IuPUfmtv2gMz2R8knxQ2d
+  args: {"code":"const rows = inputDB.query(\"SELECT slug, title FROM docs ORDER
+ BY title\"); return rows;"}
+tool_result: id=call_7L2IuPUfmtv2gMz2R8knxQ2d
+  result: {"result":[{"slug":"database-globals-api","title":"Database Globals AP
+I"},{"slug":"chat-repl-user-guide","title":"chat REPL User Guide"},{"slug":"eval
+-js-api","title":"eval_js Tool API"}]}
+reasoning: <encrypted content>
+assistant: Here are the embedded help entries I found, listed by slug and title:
+- database-globals-api — Database Globals API
+- chat-repl-user-guide — chat REPL User Guide
+- eval-js-api — eval_js Tool API
+
+In summary, the available APIs include: the Database Globals API, which provides
+ read-only access to an embedded help database via globals like inputDB and, in
+some flows, outputDB for scratch space; the chat REPL User Guide, which document
+s how to interact with the chat’s REPL environment, including command patterns a
+nd best practices; and the eval_js Tool API, which explains how to use the embed
+ded JavaScript runtime (eval_js) to query the help entries, inspect inputDB/outp
+utDB, and perform lightweight SQL-like lookups against the embedded docs. These
+entries collectively describe how to query the help corpus, how to discover avai
+lable documentation slugs, and how to execute code against the embedded runtime.
+
+>

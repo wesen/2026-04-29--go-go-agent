@@ -23,3 +23,5 @@
 - [x] Wire Pinocchio profile resolution, Geppetto runner, and stdin/stdout REPL
 - [x] Add unit/smoke tests for help DB materialization and eval_js DB access
 - [x] Run formatting/tests, update diary/bookkeeping, and commit implementation
+- [x] Wire chat root logging and embedded Glazed help command
+- [x] Show eval_js tool call arguments/results in REPL output and verify with gpt-5-nano-low in tmux

@@ -55,3 +55,13 @@ Uploaded the refreshed implementation bundle to reMarkable at /ai/2026/04/29/LLM
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/reference/01-investigation-diary.md — Records implementation bundle upload evidence
 
+
+## 2026-04-29
+
+Wired chat root logging/help like a Glazed command, changed REPL output to show eval_js args/results, and verified with gpt-5-nano-low in tmux (commit 9345f24).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — Glazed root setup and detailed turn printing
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/sources/tmux-gpt5-nano-low-smoke-with-args.txt — Live tmux validation output
+

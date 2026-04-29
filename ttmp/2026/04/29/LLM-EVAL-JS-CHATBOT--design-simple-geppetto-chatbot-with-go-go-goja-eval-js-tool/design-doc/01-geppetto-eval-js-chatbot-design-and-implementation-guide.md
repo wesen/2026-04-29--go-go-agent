@@ -28,11 +28,15 @@ RelatedFiles:
     - Path: ../../../../../../../corporate-headquarters/pinocchio/pkg/cmds/profilebootstrap/profile_selection.go
       Note: Defines Pinocchio bootstrap wrappers for profile resolution
     - Path: cmd/chat/main.go
-      Note: chat app command
+      Note: |-
+        chat app command
+        Updated to initialize logging/help like a Glazed command and show tool details
     - Path: internal/evaljs/runtime.go
       Note: builds scopedjs runtime and registers eval_js
     - Path: internal/helpdb/helpdb.go
       Note: materializes embedded help sections into inputDB and creates outputDB scratch schema
+    - Path: internal/helpdocs/docs.go
+      Note: Shared embedded help registration for CLI help and inputDB
     - Path: internal/helpdocs/help/01-eval-js-api.md
       Note: embedded eval_js API reference help entry
     - Path: internal/helpdocs/help/02-database-globals.md
@@ -47,6 +51,7 @@ LastUpdated: 2026-04-29T09:18:00-04:00
 WhatFor: Use this when implementing the first simple REPL chatbot that can query Glazed documentation databases through JavaScript.
 WhenToUse: Before writing the chatbot command, wiring Pinocchio profiles, or exposing SQLite-backed inputDB/outputDB globals to go-go-goja.
 ---
+
 
 
 
