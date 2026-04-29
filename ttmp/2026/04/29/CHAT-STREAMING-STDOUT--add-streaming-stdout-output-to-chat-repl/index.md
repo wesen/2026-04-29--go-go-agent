@@ -11,11 +11,11 @@ DocType: index
 Intent: long-term
 Owners: []
 RelatedFiles:
-    - Path: ../../../../../../corporate-headquarters/geppetto/pkg/inference/runner/run.go
+    - Path: /home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/run.go
       Note: Runner lifecycle to inspect for streaming events
-    - Path: ../../../../../../corporate-headquarters/geppetto/pkg/inference/runner/types.go
+    - Path: /home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/types.go
       Note: Runner StartRequest event sink and streaming integration point
-    - Path: cmd/chat/main.go
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go
       Note: Current chat REPL stdout rendering and runner invocation
 ExternalSources: []
 Summary: ""
