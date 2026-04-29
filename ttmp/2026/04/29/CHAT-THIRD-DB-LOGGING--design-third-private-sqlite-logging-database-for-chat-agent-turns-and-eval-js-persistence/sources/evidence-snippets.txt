@@ -1,0 +1,2241 @@
+
+== current chat app setup, profile resolution, runner, REPL (/home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go:1-220) ==
+     1	package main
+     2	
+     3	import (
+     4		"bufio"
+     5		"context"
+     6		"fmt"
+     7		"io"
+     8		"os"
+     9		"strings"
+    10		"time"
+    11	
+    12		"github.com/go-go-golems/geppetto/pkg/inference/runner"
+    13		"github.com/go-go-golems/geppetto/pkg/turns"
+    14		"github.com/go-go-golems/glazed/pkg/cmds/logging"
+    15		"github.com/go-go-golems/glazed/pkg/help"
+    16		help_cmd "github.com/go-go-golems/glazed/pkg/help/cmd"
+    17		"github.com/go-go-golems/go-go-agent/internal/evaljs"
+    18		"github.com/go-go-golems/go-go-agent/internal/helpdb"
+    19		"github.com/go-go-golems/go-go-agent/internal/helpdocs"
+    20		profilebootstrap "github.com/go-go-golems/pinocchio/pkg/cmds/profilebootstrap"
+    21		"github.com/spf13/cobra"
+    22	)
+    23	
+    24	type settings struct {
+    25		ConfigFile        string
+    26		Profile           string
+    27		ProfileRegistries []string
+    28		InputDBPath       string
+    29		OutputDBPath      string
+    30		EvalTimeout       time.Duration
+    31		MaxOutputChars    int
+    32	}
+    33	
+    34	func main() {
+    35		ctx := context.Background()
+    36		var s settings
+    37		cmd := &cobra.Command{
+    38			Use:   "chat",
+    39			Short: "Simple Geppetto chat REPL with an eval_js documentation tool",
+    40			Long: `chat is a minimal stdin/stdout LLM chatbot.
+    41	
+    42	It resolves standard Pinocchio profiles, embeds its own Glazed help entries into
+    43	an input SQLite database, exposes inputDB/outputDB globals to a go-go-goja
+    44	runtime, and registers a single Geppetto tool named eval_js.`,
+    45			PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+    46				return logging.InitLoggerFromCobra(cmd)
+    47			},
+    48			RunE: func(cmd *cobra.Command, args []string) error {
+    49				return run(ctx, s, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+    50			},
+    51		}
+    52		cmd.Flags().StringVar(&s.ConfigFile, "config-file", "", "Explicit Pinocchio config/profile file")
+    53		cmd.Flags().StringVar(&s.Profile, "profile", "", "Pinocchio profile to load")
+    54		cmd.Flags().StringArrayVar(&s.ProfileRegistries, "profile-registries", nil, "Profile registry source (repeatable)")
+    55		cmd.Flags().StringVar(&s.InputDBPath, "input-db", "", "Optional path for materialized embedded help input DB")
+    56		cmd.Flags().StringVar(&s.OutputDBPath, "output-db", "", "Optional path for writable scratch output DB")
+    57		cmd.Flags().DurationVar(&s.EvalTimeout, "eval-timeout", 5*time.Second, "eval_js execution timeout")
+    58		cmd.Flags().IntVar(&s.MaxOutputChars, "max-output-chars", 16000, "maximum string/console output characters returned by eval_js")
+    59	
+    60		if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
+    61			fmt.Fprintln(os.Stderr, err)
+    62			os.Exit(1)
+    63		}
+    64	
+    65		helpSystem := help.NewHelpSystem()
+    66		if err := helpdocs.AddDocToHelpSystem(helpSystem); err != nil {
+    67			fmt.Fprintln(os.Stderr, err)
+    68			os.Exit(1)
+    69		}
+    70		help_cmd.SetupCobraRootCommand(helpSystem, cmd)
+    71	
+    72		if err := cmd.ExecuteContext(ctx); err != nil {
+    73			fmt.Fprintln(os.Stderr, err)
+    74			os.Exit(1)
+    75		}
+    76	}
+    77	
+    78	func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Writer, errOut io.Writer) error {
+    79		parsed, err := profilebootstrap.NewCLISelectionValues(profilebootstrap.CLISelectionInput{
+    80			ConfigFile:        s.ConfigFile,
+    81			Profile:           s.Profile,
+    82			ProfileRegistries: s.ProfileRegistries,
+    83		})
+    84		if err != nil {
+    85			return err
+    86		}
+    87		resolved, err := profilebootstrap.ResolveCLIEngineSettings(ctx, parsed)
+    88		if err != nil {
+    89			return fmt.Errorf("resolve Pinocchio profile settings: %w", err)
+    90		}
+    91		if resolved.Close != nil {
+    92			defer resolved.Close()
+    93		}
+    94		if resolved.FinalInferenceSettings == nil {
+    95			return fmt.Errorf("resolved inference settings are nil")
+    96		}
+    97	
+    98		input, err := helpdb.PrepareInputDB(ctx, helpdb.InputDBConfig{
+    99			Path:    s.InputDBPath,
+   100			HelpFS:  helpdocs.FS,
+   101			HelpDir: helpdocs.Dir,
+   102		})
+   103		if err != nil {
+   104			return fmt.Errorf("prepare input DB: %w", err)
+   105		}
+   106		defer input.Close()
+   107	
+   108		output, err := helpdb.PrepareOutputDB(ctx, s.OutputDBPath)
+   109		if err != nil {
+   110			return fmt.Errorf("prepare output DB: %w", err)
+   111		}
+   112		defer output.Close()
+   113	
+   114		evalRuntime, err := evaljs.Build(ctx, evaljs.Scope{InputDB: input.DB, OutputDB: output.DB}, evaljs.Options{
+   115			Timeout:        s.EvalTimeout,
+   116			MaxOutputChars: s.MaxOutputChars,
+   117		})
+   118		if err != nil {
+   119			return fmt.Errorf("build eval_js runtime: %w", err)
+   120		}
+   121		defer evalRuntime.Close()
+   122	
+   123		r := runner.New()
+   124		runtime := runner.Runtime{
+   125			InferenceSettings: resolved.FinalInferenceSettings,
+   126			ToolRegistrars:    []runner.ToolRegistrar{evalRuntime.Registrar()},
+   127			ToolNames:         []string{evaljs.ToolName},
+   128		}
+   129	
+   130		seed := initialTurn()
+   131		if len(args) > 0 {
+   132			prompt := strings.Join(args, " ")
+   133			return runPrompt(ctx, r, runtime, &seed, prompt, out)
+   134		}
+   135		return repl(ctx, r, runtime, &seed, in, out, errOut)
+   136	}
+   137	
+   138	func repl(ctx context.Context, r *runner.Runner, runtime runner.Runtime, seed *turns.Turn, in io.Reader, out io.Writer, errOut io.Writer) error {
+   139		scanner := bufio.NewScanner(in)
+   140		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+   141		fmt.Fprintln(out, "chat REPL. Type :help for commands, :quit to exit.")
+   142		for {
+   143			fmt.Fprint(out, "> ")
+   144			if !scanner.Scan() {
+   145				return scanner.Err()
+   146			}
+   147			line := strings.TrimSpace(scanner.Text())
+   148			switch line {
+   149			case "":
+   150				continue
+   151			case ":quit", ":exit":
+   152				return nil
+   153			case ":reset":
+   154				*seed = initialTurn()
+   155				fmt.Fprintln(out, "conversation reset")
+   156				continue
+   157			case ":help":
+   158				printREPLHelp(out)
+   159				continue
+   160			}
+   161			if err := runPrompt(ctx, r, runtime, seed, line, out); err != nil {
+   162				fmt.Fprintf(errOut, "error: %v\n", err)
+   163			}
+   164		}
+   165	}
+   166	
+   167	func runPrompt(ctx context.Context, r *runner.Runner, runtime runner.Runtime, seed *turns.Turn, prompt string, out io.Writer) error {
+   168		_, updated, err := r.Run(ctx, runner.StartRequest{
+   169			SeedTurn: seed,
+   170			Prompt:   prompt,
+   171			Runtime:  runtime,
+   172		})
+   173		if err != nil {
+   174			return err
+   175		}
+   176		fmt.Fprintln(out)
+   177		turns.FprintfTurn(out, updated, turns.WithToolDetail(true))
+   178		fmt.Fprintln(out)
+   179		*seed = *updated.Clone()
+   180		return nil
+   181	}
+   182	
+   183	func initialTurn() turns.Turn {
+   184		seed := turns.Turn{}
+   185		turns.AppendBlock(&seed, turns.NewSystemTextBlock(`You are the chat agent.
+   186	You have exactly one tool available: eval_js.
+   187	Use eval_js when the user asks about the embedded chat help entries, the JavaScript runtime APIs, inputDB/outputDB, or implementation details captured in the embedded help database.
+   188	The eval_js runtime exposes inputDB as a read-only SQLite facade over embedded help entries and outputDB as writable scratch space.
+   189	Prefer small SELECT queries against inputDB.docs or inputDB.sections, and cite help slugs/titles when answering.`))
+   190		return seed
+   191	}
+   192	
+   193	func printREPLHelp(out io.Writer) {
+   194		fmt.Fprintln(out, "Commands:")
+   195		fmt.Fprintln(out, "  :help   show this help")
+   196		fmt.Fprintln(out, "  :reset  clear in-memory conversation")
+   197		fmt.Fprintln(out, "  :quit   exit")
+   198		fmt.Fprintln(out)
+   199		fmt.Fprintln(out, "Try: Use eval_js to list the embedded help entries.")
+   200	}
+
+== current eval_js scopedjs runtime (/home/manuel/code/wesen/2026-04-29--go-go-agent/internal/evaljs/runtime.go:1-220) ==
+     1	package evaljs
+     2	
+     3	import (
+     4		"context"
+     5		"database/sql"
+     6		"fmt"
+     7		"time"
+     8	
+     9		"github.com/go-go-golems/geppetto/pkg/inference/runner"
+    10		geptools "github.com/go-go-golems/geppetto/pkg/inference/tools"
+    11		"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
+    12		"github.com/go-go-golems/go-go-agent/internal/jsdb"
+    13	)
+    14	
+    15	const ToolName = "eval_js"
+    16	
+    17	type Scope struct {
+    18		InputDB  *sql.DB
+    19		OutputDB *sql.DB
+    20	}
+    21	
+    22	type Meta struct {
+    23		Globals []string
+    24	}
+    25	
+    26	type Runtime struct {
+    27		Spec   scopedjs.EnvironmentSpec[Scope, Meta]
+    28		Handle *scopedjs.BuildResult[Meta]
+    29	}
+    30	
+    31	type Options struct {
+    32		Timeout        time.Duration
+    33		MaxOutputChars int
+    34	}
+    35	
+    36	func Build(ctx context.Context, scope Scope, opts Options) (*Runtime, error) {
+    37		spec := NewSpec(opts)
+    38		handle, err := scopedjs.BuildRuntime(ctx, spec, scope)
+    39		if err != nil {
+    40			return nil, err
+    41		}
+    42		return &Runtime{Spec: spec, Handle: handle}, nil
+    43	}
+    44	
+    45	func (r *Runtime) Registrar() runner.ToolRegistrar {
+    46		return func(ctx context.Context, reg geptools.ToolRegistry) error {
+    47			if r == nil || r.Handle == nil {
+    48				return fmt.Errorf("eval_js runtime is not built")
+    49			}
+    50			return scopedjs.RegisterPrebuilt(reg, r.Spec, r.Handle, scopedjs.EvalOptionOverrides{})
+    51		}
+    52	}
+    53	
+    54	func (r *Runtime) Close() error {
+    55		if r == nil || r.Handle == nil || r.Handle.Cleanup == nil {
+    56			return nil
+    57		}
+    58		return r.Handle.Cleanup()
+    59	}
+    60	
+    61	func NewSpec(opts Options) scopedjs.EnvironmentSpec[Scope, Meta] {
+    62		evalOpts := scopedjs.DefaultEvalOptions()
+    63		if opts.Timeout > 0 {
+    64			evalOpts.Timeout = opts.Timeout
+    65		}
+    66		if opts.MaxOutputChars > 0 {
+    67			evalOpts.MaxOutputChars = opts.MaxOutputChars
+    68		}
+    69	
+    70		return scopedjs.EnvironmentSpec[Scope, Meta]{
+    71			RuntimeLabel: "chat-help-runtime",
+    72			Tool: scopedjs.ToolDefinitionSpec{
+    73				Name: ToolName,
+    74				Description: scopedjs.ToolDescription{
+    75					Summary: "Execute JavaScript against the chat agent's embedded help SQLite database and writable scratch database.",
+    76					Notes: []string{
+    77						"The runtime exposes inputDB and outputDB globals.",
+    78						"inputDB is read-only and contains help entries embedded into this chat binary.",
+    79						"The canonical help table is sections; docs is a compatibility view over sections.",
+    80						"outputDB is writable scratch space with a notes table.",
+    81						"Use parameterized SQL with ? placeholders when incorporating input values.",
+    82						"Return a JSON-serializable value from the script.",
+    83					},
+    84					StarterSnippets: []string{
+    85						`const rows = inputDB.query("SELECT slug, title, short FROM docs ORDER BY title LIMIT 10"); return rows;`,
+    86						`const matches = inputDB.query("SELECT slug, title FROM docs WHERE content LIKE ? LIMIT 10", "%outputDB%"); return matches;`,
+    87						`outputDB.exec("INSERT INTO notes(key, value) VALUES (?, ?)", "summary", "important finding"); return outputDB.query("SELECT * FROM notes");`,
+    88					},
+    89				},
+    90				Tags:    []string{"chat", "javascript", "sqlite", "help"},
+    91				Version: "0.1.0",
+    92			},
+    93			DefaultEval: evalOpts,
+    94			Configure:   configureRuntime,
+    95		}
+    96	}
+    97	
+    98	func configureRuntime(ctx context.Context, b *scopedjs.Builder, scope Scope) (Meta, error) {
+    99		_ = ctx
+   100		input := &jsdb.Facade{
+   101			Name:     "inputDB",
+   102			DB:       scope.InputDB,
+   103			Readonly: true,
+   104			Tables:   []string{"sections", "docs"},
+   105		}
+   106		name, bind, doc := input.BindGlobal("inputDB", scopedjs.GlobalDoc{
+   107			Type:        "object",
+   108			Description: "Read-only SQLite facade for embedded chat help entries. Methods: query(sql, ...args), exec(sql, ...args) which errors, schema().",
+   109		})
+   110		if err := b.AddGlobal(name, bind, doc); err != nil {
+   111			return Meta{}, err
+   112		}
+   113	
+   114		output := &jsdb.Facade{
+   115			Name:     "outputDB",
+   116			DB:       scope.OutputDB,
+   117			Readonly: false,
+   118			Tables:   []string{"notes"},
+   119		}
+   120		name, bind, doc = output.BindGlobal("outputDB", scopedjs.GlobalDoc{
+   121			Type:        "object",
+   122			Description: "Writable scratch SQLite facade. Methods: query(sql, ...args), exec(sql, ...args), schema(). Default table: notes.",
+   123		})
+   124		if err := b.AddGlobal(name, bind, doc); err != nil {
+   125			return Meta{}, err
+   126		}
+   127	
+   128		if err := b.AddHelper("parameterized SQL", `inputDB.query("SELECT * FROM docs WHERE slug = ?", slug)`, "Use ? placeholders and pass bind arguments after the SQL string."); err != nil {
+   129			return Meta{}, err
+   130		}
+   131		if err := b.AddHelper("list help entries", `inputDB.query("SELECT slug, title, short FROM docs ORDER BY title")`, "List embedded help entries available to the agent."); err != nil {
+   132			return Meta{}, err
+   133		}
+   134	
+   135		return Meta{Globals: []string{"inputDB", "outputDB"}}, nil
+   136	}
+
+== current JS database facade (/home/manuel/code/wesen/2026-04-29--go-go-agent/internal/jsdb/facade.go:1-180) ==
+     1	package jsdb
+     2	
+     3	import (
+     4		"context"
+     5		"database/sql"
+     6		"fmt"
+     7		"strings"
+     8	
+     9		"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
+    10		gojengine "github.com/go-go-golems/go-go-goja/engine"
+    11	)
+    12	
+    13	// Facade is a small JavaScript-facing SQLite API.
+    14	type Facade struct {
+    15		Name     string
+    16		DB       *sql.DB
+    17		Readonly bool
+    18		Tables   []string
+    19	}
+    20	
+    21	type ExecResult struct {
+    22		RowsAffected int64 `json:"rowsAffected"`
+    23		LastInsertID int64 `json:"lastInsertId"`
+    24	}
+    25	
+    26	type SchemaSummary struct {
+    27		Name     string   `json:"name"`
+    28		Readonly bool     `json:"readonly"`
+    29		Tables   []string `json:"tables"`
+    30	}
+    31	
+    32	func (f *Facade) Query(query string, args ...any) ([]map[string]any, error) {
+    33		if f == nil || f.DB == nil {
+    34			return nil, fmt.Errorf("%s is not configured", f.name())
+    35		}
+    36		if f.Readonly && !isReadQuery(query) {
+    37			return nil, fmt.Errorf("%s only allows SELECT/WITH queries", f.name())
+    38		}
+    39		rows, err := f.DB.QueryContext(context.Background(), query, args...)
+    40		if err != nil {
+    41			return nil, err
+    42		}
+    43		defer rows.Close()
+    44	
+    45		cols, err := rows.Columns()
+    46		if err != nil {
+    47			return nil, err
+    48		}
+    49		ret := []map[string]any{}
+    50		for rows.Next() {
+    51			vals := make([]any, len(cols))
+    52			scan := make([]any, len(cols))
+    53			for i := range vals {
+    54				scan[i] = &vals[i]
+    55			}
+    56			if err := rows.Scan(scan...); err != nil {
+    57				return nil, err
+    58			}
+    59			row := make(map[string]any, len(cols))
+    60			for i, col := range cols {
+    61				row[col] = normalizeSQLiteValue(vals[i])
+    62			}
+    63			ret = append(ret, row)
+    64		}
+    65		if err := rows.Err(); err != nil {
+    66			return nil, err
+    67		}
+    68		return ret, nil
+    69	}
+    70	
+    71	func (f *Facade) Exec(query string, args ...any) (ExecResult, error) {
+    72		if f == nil || f.DB == nil {
+    73			return ExecResult{}, fmt.Errorf("%s is not configured", f.name())
+    74		}
+    75		if f.Readonly {
+    76			return ExecResult{}, fmt.Errorf("%s is read-only", f.name())
+    77		}
+    78		res, err := f.DB.ExecContext(context.Background(), query, args...)
+    79		if err != nil {
+    80			return ExecResult{}, err
+    81		}
+    82		rowsAffected, _ := res.RowsAffected()
+    83		lastID, _ := res.LastInsertId()
+    84		return ExecResult{RowsAffected: rowsAffected, LastInsertID: lastID}, nil
+    85	}
+    86	
+    87	func (f *Facade) Schema() SchemaSummary {
+    88		if f == nil {
+    89			return SchemaSummary{}
+    90		}
+    91		return SchemaSummary{
+    92			Name:     f.name(),
+    93			Readonly: f.Readonly,
+    94			Tables:   append([]string(nil), f.Tables...),
+    95		}
+    96	}
+    97	
+    98	func (f *Facade) BindGlobal(globalName string, doc scopedjs.GlobalDoc) (string, scopedjs.GlobalBinding, scopedjs.GlobalDoc) {
+    99		if strings.TrimSpace(doc.Type) == "" {
+   100			doc.Type = "object"
+   101		}
+   102		if strings.TrimSpace(doc.Description) == "" {
+   103			doc.Description = fmt.Sprintf("SQLite facade %s", globalName)
+   104		}
+   105		return globalName, func(ctx *gojengine.RuntimeContext) error {
+   106			obj := ctx.VM.NewObject()
+   107			if err := obj.Set("query", f.Query); err != nil {
+   108				return err
+   109			}
+   110			if err := obj.Set("exec", f.Exec); err != nil {
+   111				return err
+   112			}
+   113			if err := obj.Set("schema", f.Schema); err != nil {
+   114				return err
+   115			}
+   116			return ctx.VM.Set(globalName, obj)
+   117		}, doc
+   118	}
+   119	
+   120	func (f *Facade) name() string {
+   121		if f == nil || strings.TrimSpace(f.Name) == "" {
+   122			return "db"
+   123		}
+   124		return f.Name
+   125	}
+   126	
+   127	func normalizeSQLiteValue(v any) any {
+   128		switch x := v.(type) {
+   129		case []byte:
+   130			return string(x)
+   131		default:
+   132			return x
+   133		}
+   134	}
+   135	
+   136	func isReadQuery(query string) bool {
+   137		q := strings.TrimSpace(strings.TrimPrefix(query, "\ufeff"))
+   138		if q == "" {
+   139			return false
+   140		}
+   141		q = strings.ToLower(q)
+   142		return strings.HasPrefix(q, "select") || strings.HasPrefix(q, "with")
+   143	}
+
+== Geppetto TurnPersister and runner persistence hook (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/toolloop/enginebuilder/builder.go:17-230) ==
+    17	
+    18	var (
+    19		ErrBuilderNil     = errors.New("engine builder is nil")
+    20		ErrBuilderBaseNil = errors.New("engine builder base engine is nil")
+    21	)
+    22	
+    23	// TurnPersister persists a completed turn for a session (run).
+    24	//
+    25	// Turn identity is derived from the Turn itself (t.ID). Session correlation is
+    26	// expected to be present in Turn.Metadata (see turns.KeyTurnMetaSessionID).
+    27	type TurnPersister interface {
+    28		PersistTurn(ctx context.Context, t *turns.Turn) error
+    29	}
+    30	
+    31	// Builder builds a runner that:
+    32	// - wraps a base engine with middleware
+    33	// - injects sinks and snapshot hooks via context
+    34	// - runs either a single-pass inference or the tool-calling loop
+    35	// - best-effort persists the final turn
+    36	//
+    37	// This is the standard builder used by chat-style applications.
+    38	type Builder struct {
+    39		// Base is the provider engine implementation (OpenAI/Claude/etc).
+    40		Base engine.Engine
+    41	
+    42		// Middlewares are applied in-order around Base.
+    43		Middlewares []middleware.Middleware
+    44	
+    45		// Registry enables tool calling. If nil, the runner performs a single-pass inference.
+    46		Registry tools.ToolRegistry
+    47	
+    48		// LoopConfig configures loop orchestration (e.g. MaxIterations).
+    49		LoopConfig *toolloop.LoopConfig
+    50	
+    51		// ToolConfig configures tool advertisement and execution policy.
+    52		ToolConfig *tools.ToolConfig
+    53	
+    54		// ToolExecutor allows overriding tool execution behavior (hooks, policies).
+    55		// If nil, the default executor is used.
+    56		ToolExecutor tools.ToolExecutor
+    57	
+    58		// EventSinks are attached to the run context for streaming/logging.
+    59		EventSinks []events.EventSink
+    60	
+    61		// SnapshotHook is attached to the run context for capturing intermediate turns.
+    62		SnapshotHook toolloop.SnapshotHook
+    63	
+    64		// StepController enables step-mode pauses in the tool loop when non-nil.
+    65		// It is expected to be owned by the application/web layer (not by session).
+    66		StepController *toolloop.StepController
+    67	
+    68		// StepPauseTimeout is the duration to wait at each pause before auto-continuing.
+    69		// If zero, the loop default is used.
+    70		StepPauseTimeout time.Duration
+    71	
+    72		// Persister is invoked on successful completion (when err == nil and an updated turn exists).
+    73		Persister TurnPersister
+    74	}
+    75	
+    76	var _ session.EngineBuilder = (*Builder)(nil)
+    77	
+    78	func (b *Builder) Build(ctx context.Context, sessionID string) (session.InferenceRunner, error) {
+    79		if b == nil {
+    80			return nil, ErrBuilderNil
+    81		}
+    82		if b.Base == nil {
+    83			return nil, ErrBuilderBaseNil
+    84		}
+    85	
+    86		eng := b.Base
+    87		eng = newEngineWithMiddlewares(eng, b.Middlewares)
+    88	
+    89		loopCfg := toolloop.NewLoopConfig()
+    90		if b.LoopConfig != nil {
+    91			loopCfg = *b.LoopConfig
+    92		}
+    93	
+    94		toolCfg := tools.DefaultToolConfig()
+    95		if b.ToolConfig != nil {
+    96			toolCfg = *b.ToolConfig
+    97		}
+    98	
+    99		return &runner{
+   100			sessionID:        sessionID,
+   101			eng:              eng,
+   102			registry:         b.Registry,
+   103			loopCfg:          loopCfg,
+   104			toolCfg:          toolCfg,
+   105			toolExecutor:     b.ToolExecutor,
+   106			eventSinks:       b.EventSinks,
+   107			snapshotHook:     b.SnapshotHook,
+   108			stepController:   b.StepController,
+   109			stepPauseTimeout: b.StepPauseTimeout,
+   110			persister:        b.Persister,
+   111		}, nil
+   112	}
+   113	
+   114	type runner struct {
+   115		sessionID string
+   116	
+   117		eng      engine.Engine
+   118		registry tools.ToolRegistry
+   119	
+   120		loopCfg toolloop.LoopConfig
+   121		toolCfg tools.ToolConfig
+   122	
+   123		toolExecutor tools.ToolExecutor
+   124	
+   125		eventSinks   []events.EventSink
+   126		snapshotHook toolloop.SnapshotHook
+   127	
+   128		stepController   *toolloop.StepController
+   129		stepPauseTimeout time.Duration
+   130	
+   131		persister TurnPersister
+   132	}
+   133	
+   134	var _ session.InferenceRunner = (*runner)(nil)
+   135	
+   136	type engineWithMiddlewares struct {
+   137		handler middleware.HandlerFunc
+   138	}
+   139	
+   140	func newEngineWithMiddlewares(eng engine.Engine, mws []middleware.Middleware) engine.Engine {
+   141		if len(mws) == 0 {
+   142			return eng
+   143		}
+   144	
+   145		handler := func(ctx context.Context, t *turns.Turn) (*turns.Turn, error) {
+   146			return eng.RunInference(ctx, t)
+   147		}
+   148	
+   149		return &engineWithMiddlewares{
+   150			handler: middleware.Chain(handler, mws...),
+   151		}
+   152	}
+   153	
+   154	func (e *engineWithMiddlewares) RunInference(ctx context.Context, t *turns.Turn) (*turns.Turn, error) {
+   155		return e.handler(ctx, t)
+   156	}
+   157	
+   158	func (r *runner) RunInference(ctx context.Context, t *turns.Turn) (*turns.Turn, error) {
+   159		if ctx == nil {
+   160			ctx = context.Background()
+   161		}
+   162	
+   163		runCtx := ctx
+   164		if len(r.eventSinks) > 0 {
+   165			runCtx = events.WithEventSinks(runCtx, r.eventSinks...)
+   166		}
+   167		if r.snapshotHook != nil {
+   168			runCtx = toolloop.WithTurnSnapshotHook(runCtx, r.snapshotHook)
+   169		}
+   170	
+   171		if t == nil {
+   172			t = &turns.Turn{}
+   173		}
+   174		if t.ID == "" {
+   175			t.ID = uuid.NewString()
+   176		}
+   177		if r.sessionID != "" {
+   178			if _, ok, err := turns.KeyTurnMetaSessionID.Get(t.Metadata); err != nil || !ok {
+   179				_ = turns.KeyTurnMetaSessionID.Set(&t.Metadata, r.sessionID)
+   180			}
+   181		}
+   182		if _, ok, err := turns.KeyTurnMetaInferenceID.Get(t.Metadata); err != nil || !ok {
+   183			_ = turns.KeyTurnMetaInferenceID.Set(&t.Metadata, uuid.NewString())
+   184		}
+   185	
+   186		var (
+   187			updated *turns.Turn
+   188			err     error
+   189		)
+   190		preInferenceBlockCount := len(t.Blocks)
+   191		if r.registry == nil {
+   192			updated, _, err = engine.RunInferenceWithResult(runCtx, r.eng, t)
+   193		} else {
+   194			opts := []toolloop.Option{
+   195				toolloop.WithEngine(r.eng),
+   196				toolloop.WithRegistry(r.registry),
+   197				toolloop.WithLoopConfig(r.loopCfg),
+   198				toolloop.WithToolConfig(r.toolCfg),
+   199				toolloop.WithStepController(r.stepController),
+   200			}
+   201			if r.toolExecutor != nil {
+   202				opts = append(opts, toolloop.WithExecutor(r.toolExecutor))
+   203			}
+   204			if r.stepPauseTimeout > 0 {
+   205				opts = append(opts, toolloop.WithPauseTimeout(r.stepPauseTimeout))
+   206			}
+   207			loop := toolloop.New(opts...)
+   208			updated, err = loop.RunLoop(runCtx, t)
+   209			// The tool loop calls eng.RunInference per iteration but does not
+   210			// stamp block-level inference metadata. Extract from turn metadata
+   211			// and project onto generated blocks so downstream consumers (UI)
+   212			// can render per-block inference badges.
+   213			if err == nil && updated != nil {
+   214				if result, ok, getErr := engine.ExtractInferenceResult(updated); getErr == nil && ok {
+   215					_ = engine.StampInferenceResultOnGeneratedBlocksFromIndex(updated, result, preInferenceBlockCount)
+   216				}
+   217			}
+   218		}
+   219	
+   220		if updated != nil && r.sessionID != "" {
+   221			if _, ok, err := turns.KeyTurnMetaSessionID.Get(updated.Metadata); err != nil || !ok {
+   222				_ = turns.KeyTurnMetaSessionID.Set(&updated.Metadata, r.sessionID)
+   223			}
+   224		}
+   225		if updated != nil {
+   226			if updated.ID == "" {
+   227				updated.ID = t.ID
+   228			}
+   229			if iid, ok, err := turns.KeyTurnMetaInferenceID.Get(t.Metadata); err == nil && ok && iid != "" {
+   230				if _, ok2, err2 := turns.KeyTurnMetaInferenceID.Get(updated.Metadata); err2 != nil || !ok2 {
+
+== Geppetto runner.Runtime and StartRequest include Persister (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/types.go:1-90) ==
+     1	package runner
+     2	
+     3	import (
+     4		"context"
+     5		"time"
+     6	
+     7		"github.com/go-go-golems/geppetto/pkg/events"
+     8		"github.com/go-go-golems/geppetto/pkg/inference/engine"
+     9		gepmiddleware "github.com/go-go-golems/geppetto/pkg/inference/middleware"
+    10		"github.com/go-go-golems/geppetto/pkg/inference/middlewarecfg"
+    11		"github.com/go-go-golems/geppetto/pkg/inference/session"
+    12		"github.com/go-go-golems/geppetto/pkg/inference/toolloop"
+    13		"github.com/go-go-golems/geppetto/pkg/inference/toolloop/enginebuilder"
+    14		geptools "github.com/go-go-golems/geppetto/pkg/inference/tools"
+    15		"github.com/go-go-golems/geppetto/pkg/steps/ai/settings"
+    16		"github.com/go-go-golems/geppetto/pkg/turns"
+    17	)
+    18	
+    19	// ToolRegistrar registers zero or more tools into a target registry.
+    20	type ToolRegistrar func(ctx context.Context, reg geptools.ToolRegistry) error
+    21	
+    22	// Runtime is fully resolved application-owned runtime input consumed by the runner.
+    23	type Runtime struct {
+    24		InferenceSettings *settings.InferenceSettings
+    25		SystemPrompt      string
+    26	
+    27		MiddlewareUses []middlewarecfg.Use
+    28		Middlewares    []gepmiddleware.Middleware
+    29	
+    30		ToolNames      []string
+    31		ToolRegistrars []ToolRegistrar
+    32	
+    33		RuntimeKey         string
+    34		RuntimeFingerprint string
+    35		ProfileVersion     uint64
+    36	}
+    37	
+    38	// StartRequest describes one prepared or executed inference run.
+    39	type StartRequest struct {
+    40		SessionID string
+    41		Prompt    string
+    42		SeedTurn  *turns.Turn
+    43		Runtime   Runtime
+    44	
+    45		EventSinks   []events.EventSink
+    46		SnapshotHook toolloop.SnapshotHook
+    47		Persister    enginebuilder.TurnPersister
+    48	}
+    49	
+    50	// PreparedRun holds the assembled state required to start or inspect one run.
+    51	type PreparedRun struct {
+    52		Runtime Runtime
+    53	
+    54		Engine   engine.Engine
+    55		Registry geptools.ToolRegistry
+    56		Session  *session.Session
+    57		Turn     *turns.Turn
+    58	}
+    59	
+    60	// Runner assembles engines, middleware, tool registries, and sessions from
+    61	// resolved runtime input.
+    62	type Runner struct {
+    63		middlewareDefinitions middlewarecfg.DefinitionRegistry
+    64		middlewareBuildDeps   middlewarecfg.BuildDeps
+    65	
+    66		loopConfig toolloop.LoopConfig
+    67		toolConfig geptools.ToolConfig
+    68	
+    69		engineFactory  func(*settings.InferenceSettings) (engine.Engine, error)
+    70		toolExecutor   geptools.ToolExecutor
+    71		toolRegistrars []ToolRegistrar
+    72	
+    73		eventSinks       []events.EventSink
+    74		snapshotHook     toolloop.SnapshotHook
+    75		persister        enginebuilder.TurnPersister
+    76		stepController   *toolloop.StepController
+    77		stepPauseTimeout time.Duration
+    78	}
+
+== Geppetto runner prepares session/turn and applies metadata (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/prepare.go:17-120) ==
+    17	func (r *Runner) Prepare(ctx context.Context, req StartRequest) (*PreparedRun, error) {
+    18		if r == nil {
+    19			return nil, ErrRunnerNil
+    20		}
+    21		if ctx == nil {
+    22			ctx = context.Background()
+    23		}
+    24		if strings.TrimSpace(req.Prompt) == "" && (req.SeedTurn == nil || len(req.SeedTurn.Blocks) == 0) {
+    25			return nil, ErrPromptAndSeedEmpty
+    26		}
+    27	
+    28		eng, _, err := r.buildEngine(ctx, req.Runtime)
+    29		if err != nil {
+    30			return nil, err
+    31		}
+    32	
+    33		registry, err := buildRegistry(ctx, appendToolRegistrars(r.toolRegistrars, req.Runtime.ToolRegistrars), req.Runtime.ToolNames)
+    34		if err != nil {
+    35			return nil, err
+    36		}
+    37	
+    38		sess := session.NewSession()
+    39		if sessionID := strings.TrimSpace(req.SessionID); sessionID != "" {
+    40			sess.SessionID = sessionID
+    41		}
+    42		sess.Builder = &enginebuilder.Builder{
+    43			Base:             eng,
+    44			Registry:         registry,
+    45			LoopConfig:       cloneLoopConfig(r.loopConfig),
+    46			ToolConfig:       cloneToolConfig(r.toolConfig),
+    47			ToolExecutor:     r.toolExecutor,
+    48			EventSinks:       appendEventSinks(r.eventSinks, req.EventSinks),
+    49			SnapshotHook:     chooseSnapshotHook(r.snapshotHook, req.SnapshotHook),
+    50			StepController:   r.stepController,
+    51			StepPauseTimeout: r.stepPauseTimeout,
+    52			Persister:        choosePersister(r.persister, req.Persister),
+    53		}
+    54	
+    55		turn, err := appendSeedTurn(sess, req)
+    56		if err != nil {
+    57			return nil, err
+    58		}
+    59		applyRuntimeMetadata(turn, req.Runtime)
+    60	
+    61		return &PreparedRun{
+    62			Runtime:  req.Runtime,
+    63			Engine:   eng,
+    64			Registry: registry,
+    65			Session:  sess,
+    66			Turn:     turn,
+    67		}, nil
+    68	}
+    69	
+    70	func appendSeedTurn(sess *session.Session, req StartRequest) (*turns.Turn, error) {
+    71		if req.SeedTurn == nil {
+    72			return sess.AppendNewTurnFromUserPrompt(req.Prompt)
+    73		}
+    74	
+    75		seed := req.SeedTurn.Clone()
+    76		if seed == nil {
+    77			seed = &turns.Turn{}
+    78		}
+    79		// A prepared run always owns a fresh turn identity. Reusing a historical
+    80		// Turn.ID risks overwriting persisted snapshots keyed by turn id.
+    81		seed.ID = ""
+    82		if strings.TrimSpace(req.Prompt) != "" {
+    83			turns.AppendBlock(seed, turns.NewUserTextBlock(req.Prompt))
+    84		}
+    85		sess.Append(seed)
+    86		return seed, nil
+    87	}
+    88	
+    89	func applyRuntimeMetadata(t *turns.Turn, runtime Runtime) {
+    90		if t == nil {
+    91			return
+    92		}
+    93	
+    94		attrib := map[string]any{}
+    95		if existing, ok, err := turns.KeyTurnMetaRuntime.Get(t.Metadata); err == nil && ok {
+    96			if m, ok := existing.(map[string]any); ok {
+    97				for k, v := range m {
+    98					attrib[k] = v
+    99				}
+   100			}
+   101		}
+   102	
+   103		if runtimeKey := strings.TrimSpace(runtime.RuntimeKey); runtimeKey != "" {
+   104			attrib["runtime_key"] = runtimeKey
+   105		}
+   106		if fingerprint := strings.TrimSpace(runtime.RuntimeFingerprint); fingerprint != "" {
+   107			attrib["runtime_fingerprint"] = fingerprint
+   108		}
+   109		if runtime.ProfileVersion > 0 {
+   110			attrib["profile.version"] = runtime.ProfileVersion
+   111		}
+   112		if len(attrib) == 0 {
+   113			return
+   114		}
+   115	
+   116		_ = turns.KeyTurnMetaRuntime.Set(&t.Metadata, attrib)
+   117	}
+   118	
+   119	func appendToolRegistrars(a []ToolRegistrar, b []ToolRegistrar) []ToolRegistrar {
+   120		if len(a) == 0 && len(b) == 0 {
+
+== Turn YAML serialization for Pinocchio chatstore (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/turns/serde/serde.go:1-85) ==
+     1	package serde
+     2	
+     3	import (
+     4		"os"
+     5		"strings"
+     6	
+     7		"gopkg.in/yaml.v3"
+     8	
+     9		"github.com/go-go-golems/geppetto/pkg/turns"
+    10	)
+    11	
+    12	// Options controls serialization behavior.
+    13	type Options struct {
+    14		// OmitData omits Turn.Data on write
+    15		OmitData bool
+    16	}
+    17	
+    18	// NormalizeTurn applies serde defaults (best-effort) without mutating order.
+    19	func NormalizeTurn(t *turns.Turn) {
+    20		if t == nil {
+    21			return
+    22		}
+    23		for i := range t.Blocks {
+    24			b := &t.Blocks[i]
+    25			// Ensure payload and metadata are non-nil for stability
+    26			if b.Payload == nil {
+    27				b.Payload = map[string]any{}
+    28			}
+    29			// Synthesize assistant role for llm_text if missing
+    30			if b.Kind == turns.BlockKindLLMText {
+    31				if strings.TrimSpace(b.Role) == "" {
+    32					b.Role = turns.RoleAssistant
+    33				}
+    34			}
+    35		}
+    36	}
+    37	
+    38	// ToYAML marshals a Turn to YAML using snake_case tags and BlockKind string enums.
+    39	func ToYAML(t *turns.Turn, opt Options) ([]byte, error) {
+    40		if t == nil {
+    41			return []byte("{}"), nil
+    42		}
+    43		// Optionally omit Data
+    44		snapshot := *t
+    45		if opt.OmitData {
+    46			snapshot.Data = turns.Data{}
+    47		}
+    48		NormalizeTurn(&snapshot)
+    49		return yaml.Marshal(snapshot)
+    50	}
+    51	
+    52	// FromYAML unmarshals a Turn from YAML.
+    53	func FromYAML(b []byte) (*turns.Turn, error) {
+    54		var t turns.Turn
+    55		if err := yaml.Unmarshal(b, &t); err != nil {
+    56			return nil, err
+    57		}
+    58		NormalizeTurn(&t)
+    59		return &t, nil
+    60	}
+    61	
+    62	// SaveTurnYAML writes a Turn to a YAML file.
+    63	func SaveTurnYAML(path string, t *turns.Turn, opt Options) error {
+    64		data, err := ToYAML(t, opt)
+    65		if err != nil {
+    66			return err
+    67		}
+    68		return os.WriteFile(path, data, 0644)
+    69	}
+    70	
+    71	// LoadTurnYAML reads a Turn from a YAML file.
+    72	func LoadTurnYAML(path string) (*turns.Turn, error) {
+    73		b, err := os.ReadFile(path)
+    74		if err != nil {
+    75			return nil, err
+    76		}
+    77		return FromYAML(b)
+    78	}
+
+== Pinocchio TurnStore interface (/home/manuel/code/wesen/corporate-headquarters/pinocchio/pkg/persistence/chatstore/turn_store.go:1-42) ==
+     1	package chatstore
+     2	
+     3	import "context"
+     4	
+     5	// TurnSnapshot captures a serialized turn for inspection.
+     6	type TurnSnapshot struct {
+     7		ConvID      string `json:"conv_id"`
+     8		SessionID   string `json:"session_id"`
+     9		TurnID      string `json:"turn_id"`
+    10		Phase       string `json:"phase"`
+    11		RuntimeKey  string `json:"runtime_key,omitempty"`
+    12		InferenceID string `json:"inference_id,omitempty"`
+    13		CreatedAtMs int64  `json:"created_at_ms"`
+    14		Payload     string `json:"payload"`
+    15	}
+    16	
+    17	// TurnSaveOptions controls first-class per-turn query columns.
+    18	//
+    19	// Payload metadata remains canonical, but these fields are projected into
+    20	// indexed columns for query/debug surfaces.
+    21	type TurnSaveOptions struct {
+    22		RuntimeKey  string
+    23		InferenceID string
+    24	}
+    25	
+    26	// TurnQuery describes filters for loading stored turns.
+    27	type TurnQuery struct {
+    28		ConvID    string
+    29		SessionID string
+    30		Phase     string
+    31		SinceMs   int64
+    32		Limit     int
+    33	}
+    34	
+    35	// TurnStore persists serialized turns for inspection/debugging.
+    36	type TurnStore interface {
+    37		Save(ctx context.Context, convID, sessionID, turnID, phase string, createdAtMs int64, payload string, opts TurnSaveOptions) error
+    38		List(ctx context.Context, q TurnQuery) ([]TurnSnapshot, error)
+    39		Close() error
+    40	}
+
+== Pinocchio SQLiteTurnStore constructor and schema (/home/manuel/code/wesen/corporate-headquarters/pinocchio/pkg/persistence/chatstore/turn_store_sqlite.go:40-130) ==
+    40	func NewSQLiteTurnStore(dsn string) (*SQLiteTurnStore, error) {
+    41		if strings.TrimSpace(dsn) == "" {
+    42			return nil, errors.New("sqlite turn store: empty dsn")
+    43		}
+    44		db, err := sql.Open("sqlite3", dsn)
+    45		if err != nil {
+    46			return nil, err
+    47		}
+    48		s := &SQLiteTurnStore{db: db}
+    49		if err := s.migrate(); err != nil {
+    50			_ = db.Close()
+    51			return nil, err
+    52		}
+    53		return s, nil
+    54	}
+    55	
+    56	func (s *SQLiteTurnStore) Close() error {
+    57		if s == nil || s.db == nil {
+    58			return nil
+    59		}
+    60		return s.db.Close()
+    61	}
+    62	
+    63	func (s *SQLiteTurnStore) migrate() error {
+    64		if s == nil || s.db == nil {
+    65			return errors.New("sqlite turn store: db is nil")
+    66		}
+    67	
+    68		createTableStmts := []string{
+    69			`CREATE TABLE IF NOT EXISTS turns (
+    70				conv_id TEXT NOT NULL,
+    71				session_id TEXT NOT NULL,
+    72				turn_id TEXT NOT NULL,
+    73				turn_created_at_ms INTEGER NOT NULL,
+    74				turn_metadata_json TEXT NOT NULL DEFAULT '{}',
+    75				turn_data_json TEXT NOT NULL DEFAULT '{}',
+    76				runtime_key TEXT NOT NULL DEFAULT '',
+    77				inference_id TEXT NOT NULL DEFAULT '',
+    78				updated_at_ms INTEGER NOT NULL,
+    79				PRIMARY KEY (conv_id, session_id, turn_id)
+    80			);`,
+    81			`CREATE TABLE IF NOT EXISTS blocks (
+    82				block_id TEXT NOT NULL,
+    83				content_hash TEXT NOT NULL,
+    84				hash_algorithm TEXT NOT NULL DEFAULT 'sha256-canonical-json-v1',
+    85				kind TEXT NOT NULL,
+    86				role TEXT NOT NULL DEFAULT '',
+    87				payload_json TEXT NOT NULL DEFAULT '{}',
+    88				block_metadata_json TEXT NOT NULL DEFAULT '{}',
+    89				first_seen_at_ms INTEGER NOT NULL,
+    90				PRIMARY KEY (block_id, content_hash)
+    91			);`,
+    92			`CREATE TABLE IF NOT EXISTS turn_block_membership (
+    93				conv_id TEXT NOT NULL,
+    94				session_id TEXT NOT NULL,
+    95				turn_id TEXT NOT NULL,
+    96				phase TEXT NOT NULL,
+    97				snapshot_created_at_ms INTEGER NOT NULL,
+    98				ordinal INTEGER NOT NULL,
+    99				block_id TEXT NOT NULL,
+   100				content_hash TEXT NOT NULL,
+   101				PRIMARY KEY (conv_id, session_id, turn_id, phase, snapshot_created_at_ms, ordinal),
+   102				FOREIGN KEY (conv_id, session_id, turn_id) REFERENCES turns(conv_id, session_id, turn_id) ON DELETE CASCADE,
+   103				FOREIGN KEY (block_id, content_hash) REFERENCES blocks(block_id, content_hash)
+   104			);`,
+   105		}
+   106		for _, st := range createTableStmts {
+   107			if _, err := s.db.Exec(st); err != nil {
+   108				return errors.Wrap(err, "sqlite turn store: migrate")
+   109			}
+   110		}
+   111	
+   112		if err := s.ensureTurnsTableColumns(); err != nil {
+   113			return errors.Wrap(err, "sqlite turn store: ensure turns columns")
+   114		}
+   115	
+   116		createIndexStmts := []string{
+   117			`CREATE INDEX IF NOT EXISTS turns_by_conv_session ON turns(conv_id, session_id, updated_at_ms DESC);`,
+   118			`CREATE INDEX IF NOT EXISTS turns_by_session ON turns(session_id, updated_at_ms DESC);`,
+   119			`CREATE INDEX IF NOT EXISTS turns_by_conv_runtime_updated ON turns(conv_id, runtime_key, updated_at_ms DESC);`,
+   120			`CREATE INDEX IF NOT EXISTS turns_by_conv_inference_updated ON turns(conv_id, inference_id, updated_at_ms DESC);`,
+   121			`CREATE INDEX IF NOT EXISTS blocks_by_kind_role ON blocks(kind, role);`,
+   122			`CREATE INDEX IF NOT EXISTS turn_block_membership_by_turn_phase ON turn_block_membership(conv_id, session_id, turn_id, phase, snapshot_created_at_ms DESC, ordinal);`,
+   123			`CREATE INDEX IF NOT EXISTS turn_block_membership_by_block ON turn_block_membership(block_id, content_hash);`,
+   124		}
+   125		for _, st := range createIndexStmts {
+   126			if _, err := s.db.Exec(st); err != nil {
+   127				return errors.Wrap(err, "sqlite turn store: migrate")
+   128			}
+   129		}
+   130	
+
+== Pinocchio SQLiteTurnStore Save normalizes turn blocks (/home/manuel/code/wesen/corporate-headquarters/pinocchio/pkg/persistence/chatstore/turn_store_sqlite.go:228-385) ==
+   228	func (s *SQLiteTurnStore) Save(ctx context.Context, convID, sessionID, turnID, phase string, createdAtMs int64, payload string, opts TurnSaveOptions) error {
+   229		if s == nil || s.db == nil {
+   230			return errors.New("sqlite turn store: db is nil")
+   231		}
+   232		if strings.TrimSpace(convID) == "" {
+   233			return errors.New("sqlite turn store: convID is empty")
+   234		}
+   235		if strings.TrimSpace(sessionID) == "" {
+   236			return errors.New("sqlite turn store: sessionID is empty")
+   237		}
+   238		if strings.TrimSpace(turnID) == "" {
+   239			return errors.New("sqlite turn store: turnID is empty")
+   240		}
+   241		if strings.TrimSpace(phase) == "" {
+   242			return errors.New("sqlite turn store: phase is empty")
+   243		}
+   244		if ctx == nil {
+   245			return errors.New("sqlite turn store: ctx is nil")
+   246		}
+   247		if createdAtMs <= 0 {
+   248			createdAtMs = time.Now().UnixMilli()
+   249		}
+   250	
+   251		t, err := serde.FromYAML([]byte(payload))
+   252		if err != nil {
+   253			return errors.Wrap(err, "sqlite turn store: parse payload yaml")
+   254		}
+   255		if t == nil {
+   256			return errors.New("sqlite turn store: parse payload yaml: decoded nil turn")
+   257		}
+   258	
+   259		row := snapshotBackfillRow{
+   260			convID:      convID,
+   261			sessionID:   sessionID,
+   262			turnID:      turnID,
+   263			phase:       phase,
+   264			runtimeKey:  strings.TrimSpace(opts.RuntimeKey),
+   265			inferenceID: strings.TrimSpace(opts.InferenceID),
+   266			createdAtMs: createdAtMs,
+   267		}
+   268		if row.runtimeKey == "" {
+   269			row.runtimeKey = runtimeKeyFromTurnMetadata(t.Metadata)
+   270		}
+   271		if row.inferenceID == "" {
+   272			row.inferenceID = inferenceIDFromTurnMetadata(t.Metadata)
+   273		}
+   274		_, err = s.persistNormalizedSnapshot(ctx, row, t)
+   275		return err
+   276	}
+   277	
+   278	func (s *SQLiteTurnStore) persistNormalizedSnapshot(ctx context.Context, row snapshotBackfillRow, t *turns.Turn) (int, error) {
+   279		tx, err := s.db.BeginTx(ctx, nil)
+   280		if err != nil {
+   281			return 0, errors.Wrap(err, "sqlite turn store: begin tx")
+   282		}
+   283		committed := false
+   284		defer func() {
+   285			if !committed {
+   286				_ = tx.Rollback()
+   287			}
+   288		}()
+   289	
+   290		turnID := strings.TrimSpace(row.turnID)
+   291		if tid := strings.TrimSpace(t.ID); tid != "" {
+   292			turnID = tid
+   293		}
+   294		if turnID == "" {
+   295			turnID = "turn"
+   296		}
+   297	
+   298		turnMetadataJSON, err := marshalJSONObject(turnMetadataToMap(t.Metadata))
+   299		if err != nil {
+   300			return 0, errors.Wrap(err, "sqlite turn store: marshal turn metadata")
+   301		}
+   302		turnDataJSON, err := marshalJSONObject(turnDataToMap(t.Data))
+   303		if err != nil {
+   304			return 0, errors.Wrap(err, "sqlite turn store: marshal turn data")
+   305		}
+   306	
+   307		if _, err := tx.ExecContext(ctx, `
+   308			INSERT INTO turns(
+   309				conv_id, session_id, turn_id, turn_created_at_ms, turn_metadata_json, turn_data_json, runtime_key, inference_id, updated_at_ms
+   310			)
+   311			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+   312			ON CONFLICT(conv_id, session_id, turn_id) DO UPDATE SET
+   313				turn_created_at_ms = MIN(turns.turn_created_at_ms, excluded.turn_created_at_ms),
+   314				turn_metadata_json = excluded.turn_metadata_json,
+   315				turn_data_json = excluded.turn_data_json,
+   316				runtime_key = CASE
+   317					WHEN excluded.runtime_key <> '' THEN excluded.runtime_key
+   318					ELSE turns.runtime_key
+   319				END,
+   320				inference_id = CASE
+   321					WHEN excluded.inference_id <> '' THEN excluded.inference_id
+   322					ELSE turns.inference_id
+   323				END,
+   324				updated_at_ms = MAX(turns.updated_at_ms, excluded.updated_at_ms)
+   325		`, row.convID, row.sessionID, turnID, row.createdAtMs, turnMetadataJSON, turnDataJSON, row.runtimeKey, row.inferenceID, row.createdAtMs); err != nil {
+   326			return 0, errors.Wrap(err, "sqlite turn store: upsert turns row")
+   327		}
+   328	
+   329		if _, err := tx.ExecContext(ctx, `
+   330			DELETE FROM turn_block_membership
+   331			WHERE conv_id = ? AND session_id = ? AND turn_id = ? AND phase = ? AND snapshot_created_at_ms = ?
+   332		`, row.convID, row.sessionID, turnID, row.phase, row.createdAtMs); err != nil {
+   333			return 0, errors.Wrap(err, "sqlite turn store: clear existing membership rowset")
+   334		}
+   335	
+   336		membershipInserted := 0
+   337		for i, block := range t.Blocks {
+   338			blockID := normalizeBlockID(block.ID, turnID, i)
+   339			payloadMap := cloneStringAnyMap(block.Payload)
+   340			blockMetadata := blockMetadataToMap(block.Metadata)
+   341	
+   342			contentHash, err := ComputeBlockContentHash(block.Kind.String(), block.Role, payloadMap, blockMetadata)
+   343			if err != nil {
+   344				return 0, errors.Wrap(err, "sqlite turn store: compute block content hash")
+   345			}
+   346			payloadJSON, err := marshalJSONObject(payloadMap)
+   347			if err != nil {
+   348				return 0, errors.Wrap(err, "sqlite turn store: marshal block payload")
+   349			}
+   350			blockMetadataJSON, err := marshalJSONObject(blockMetadata)
+   351			if err != nil {
+   352				return 0, errors.Wrap(err, "sqlite turn store: marshal block metadata")
+   353			}
+   354	
+   355			if _, err := tx.ExecContext(ctx, `
+   356				INSERT INTO blocks(
+   357					block_id, content_hash, hash_algorithm, kind, role, payload_json, block_metadata_json, first_seen_at_ms
+   358				)
+   359				VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+   360				ON CONFLICT(block_id, content_hash) DO UPDATE SET
+   361					kind = excluded.kind,
+   362					role = excluded.role,
+   363					payload_json = excluded.payload_json,
+   364					block_metadata_json = excluded.block_metadata_json,
+   365					first_seen_at_ms = MIN(blocks.first_seen_at_ms, excluded.first_seen_at_ms)
+   366			`, blockID, contentHash, BlockContentHashAlgorithmV1, strings.TrimSpace(block.Kind.String()), strings.TrimSpace(block.Role), payloadJSON, blockMetadataJSON, row.createdAtMs); err != nil {
+   367				return 0, errors.Wrap(err, "sqlite turn store: upsert blocks row")
+   368			}
+   369	
+   370			if _, err := tx.ExecContext(ctx, `
+   371				INSERT OR REPLACE INTO turn_block_membership(
+   372					conv_id, session_id, turn_id, phase, snapshot_created_at_ms, ordinal, block_id, content_hash
+   373				) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+   374			`, row.convID, row.sessionID, turnID, row.phase, row.createdAtMs, i, blockID, contentHash); err != nil {
+   375				return 0, errors.Wrap(err, "sqlite turn store: insert turn_block_membership")
+   376			}
+   377			membershipInserted++
+   378		}
+   379	
+   380		if err := tx.Commit(); err != nil {
+   381			return 0, errors.Wrap(err, "sqlite turn store: commit tx")
+   382		}
+   383		committed = true
+   384		return membershipInserted, nil
+   385	}
+
+== go-go-goja replapi app/session/evaluate/history (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replapi/app.go:1-180) ==
+     1	package replapi
+     2	
+     3	import (
+     4		"context"
+     5		"sort"
+     6		"time"
+     7	
+     8		"github.com/go-go-golems/go-go-goja/engine"
+     9		"github.com/go-go-golems/go-go-goja/pkg/repldb"
+    10		"github.com/go-go-golems/go-go-goja/pkg/replsession"
+    11		"github.com/pkg/errors"
+    12		"github.com/rs/zerolog"
+    13	)
+    14	
+    15	// App combines the live session kernel with the optional durable session store.
+    16	type App struct {
+    17		config  Config
+    18		service *replsession.Service
+    19		store   *repldb.Store
+    20	}
+    21	
+    22	// New creates a configurable REPL application facade.
+    23	func New(factory *engine.Factory, logger zerolog.Logger, opts ...Option) (*App, error) {
+    24		config := DefaultConfig()
+    25		for _, opt := range opts {
+    26			if opt != nil {
+    27				opt(&config)
+    28			}
+    29		}
+    30		return NewWithConfig(factory, logger, config)
+    31	}
+    32	
+    33	// NewWithConfig creates a configurable REPL application facade from an explicit config.
+    34	func NewWithConfig(factory *engine.Factory, logger zerolog.Logger, config Config) (*App, error) {
+    35		if factory == nil {
+    36			return nil, errors.New("replapi: factory is nil")
+    37		}
+    38	
+    39		config = normalizeConfig(config)
+    40		if err := validateConfig(config); err != nil {
+    41			return nil, err
+    42		}
+    43	
+    44		serviceOpts := []replsession.Option{
+    45			replsession.WithDefaultSessionOptions(config.SessionOptions),
+    46		}
+    47		if config.Store != nil {
+    48			serviceOpts = append(serviceOpts, replsession.WithPersistence(config.Store))
+    49		}
+    50	
+    51		return &App{
+    52			config:  config,
+    53			service: replsession.NewService(factory, logger, serviceOpts...),
+    54			store:   config.Store,
+    55		}, nil
+    56	}
+    57	
+    58	func (a *App) CreateSession(ctx context.Context) (*replsession.SessionSummary, error) {
+    59		return a.CreateSessionWithOptions(ctx, SessionOverrides{})
+    60	}
+    61	
+    62	func (a *App) CreateSessionWithOptions(ctx context.Context, opts SessionOverrides) (*replsession.SessionSummary, error) {
+    63		if a == nil {
+    64			return nil, errors.New("replapi: app is nil")
+    65		}
+    66		resolved := resolveCreateSessionOptions(a.config, opts)
+    67		if resolved.Policy.PersistenceEnabled() && a.store == nil {
+    68			return nil, errors.New("replapi: persistence requested but no store configured")
+    69		}
+    70		return a.service.CreateSessionWithOptions(ctx, resolved)
+    71	}
+    72	
+    73	func (a *App) Evaluate(ctx context.Context, sessionID string, source string) (*replsession.EvaluateResponse, error) {
+    74		if _, err := a.ensureLiveSession(ctx, sessionID); err != nil {
+    75			return nil, err
+    76		}
+    77		return a.service.Evaluate(ctx, sessionID, source)
+    78	}
+    79	
+    80	func (a *App) Snapshot(ctx context.Context, sessionID string) (*replsession.SessionSummary, error) {
+    81		return a.ensureLiveSession(ctx, sessionID)
+    82	}
+    83	
+    84	func (a *App) Restore(ctx context.Context, sessionID string) (*replsession.SessionSummary, error) {
+    85		if a.store == nil {
+    86			return nil, errors.New("replapi: restore requires a store")
+    87		}
+    88		record, err := a.store.LoadSession(ctx, sessionID)
+    89		if err != nil {
+    90			return nil, err
+    91		}
+    92		history, err := a.store.LoadReplaySource(ctx, sessionID)
+    93		if err != nil {
+    94			return nil, err
+    95		}
+    96		restoreOptions := a.restoreOptionsForRecord(record)
+    97		return a.service.RestoreSession(ctx, restoreOptions, history)
+    98	}
+    99	
+   100	func (a *App) DeleteSession(ctx context.Context, sessionID string) error {
+   101		err := a.service.DeleteSession(ctx, sessionID)
+   102		if err == nil {
+   103			return nil
+   104		}
+   105		if !errors.Is(err, replsession.ErrSessionNotFound) {
+   106			return err
+   107		}
+   108		if a.store == nil {
+   109			return err
+   110		}
+   111		if _, loadErr := a.store.LoadSession(ctx, sessionID); loadErr != nil {
+   112			return loadErr
+   113		}
+   114		return a.store.DeleteSession(ctx, sessionID, time.Now().UTC())
+   115	}
+   116	
+   117	func (a *App) ListSessions(ctx context.Context) ([]repldb.SessionRecord, error) {
+   118		if a.store == nil {
+   119			return nil, errors.New("replapi: list sessions requires a store")
+   120		}
+   121		return a.store.ListSessions(ctx)
+   122	}
+   123	
+   124	func (a *App) History(ctx context.Context, sessionID string) ([]repldb.EvaluationRecord, error) {
+   125		if a.store == nil {
+   126			return nil, errors.New("replapi: history requires a store")
+   127		}
+   128		return a.store.LoadEvaluations(ctx, sessionID)
+   129	}
+   130	
+   131	func (a *App) Export(ctx context.Context, sessionID string) (*repldb.SessionExport, error) {
+   132		if a.store == nil {
+   133			return nil, errors.New("replapi: export requires a store")
+   134		}
+   135		return a.store.ExportSession(ctx, sessionID)
+   136	}
+   137	
+   138	func (a *App) ReplaySource(ctx context.Context, sessionID string) ([]string, error) {
+   139		if a.store == nil {
+   140			return nil, errors.New("replapi: replay source requires a store")
+   141		}
+   142		return a.store.LoadReplaySource(ctx, sessionID)
+   143	}
+   144	
+   145	func (a *App) Bindings(ctx context.Context, sessionID string) ([]replsession.BindingView, error) {
+   146		summary, err := a.ensureLiveSession(ctx, sessionID)
+   147		if err != nil {
+   148			return nil, err
+   149		}
+   150		return append([]replsession.BindingView(nil), summary.Bindings...), nil
+   151	}
+   152	
+   153	func (a *App) Docs(ctx context.Context, sessionID string) ([]repldb.BindingDocRecord, error) {
+   154		if a.store == nil {
+   155			return nil, errors.New("replapi: docs requires a store")
+   156		}
+   157		exported, err := a.store.ExportSession(ctx, sessionID)
+   158		if err != nil {
+   159			return nil, err
+   160		}
+   161		docs := []repldb.BindingDocRecord{}
+   162		for _, evaluation := range exported.Evaluations {
+   163			docs = append(docs, evaluation.BindingDocs...)
+   164		}
+   165		sort.SliceStable(docs, func(i, j int) bool {
+   166			if docs[i].SymbolName != docs[j].SymbolName {
+   167				return docs[i].SymbolName < docs[j].SymbolName
+   168			}
+   169			return docs[i].CellID < docs[j].CellID
+   170		})
+   171		return docs, nil
+   172	}
+   173	
+   174	// WithRuntime runs fn against the live runtime for one session while preserving
+   175	// replapi session ownership and auto-restore behavior.
+   176	func (a *App) WithRuntime(ctx context.Context, sessionID string, fn func(*engine.Runtime) error) error {
+   177		if a == nil {
+   178			return errors.New("replapi: app is nil")
+   179		}
+   180		if _, err := a.ensureLiveSession(ctx, sessionID); err != nil {
+
+== go-go-goja replapi profiles and persistent config (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replapi/config.go:1-170) ==
+     1	package replapi
+     2	
+     3	import (
+     4		"strings"
+     5		"time"
+     6	
+     7		"github.com/go-go-golems/go-go-goja/pkg/repldb"
+     8		"github.com/go-go-golems/go-go-goja/pkg/replsession"
+     9		"github.com/pkg/errors"
+    10	)
+    11	
+    12	// Profile is the opinionated replapi preset selector.
+    13	type Profile string
+    14	
+    15	const (
+    16		ProfileRaw         Profile = "raw"
+    17		ProfileInteractive Profile = "interactive"
+    18		ProfilePersistent  Profile = "persistent"
+    19	)
+    20	
+    21	// Config controls app-level replapi behavior.
+    22	type Config struct {
+    23		Profile     Profile
+    24		Store       *repldb.Store
+    25		AutoRestore bool
+    26		// SessionOptions are the default kernel/session options passed into replsession.
+    27		SessionOptions replsession.SessionOptions
+    28	}
+    29	
+    30	// SessionOverrides are app-layer create-session overrides.
+    31	//
+    32	// Unlike replsession.SessionOptions, this type is intentionally sparse: it lets
+    33	// callers override profile/policy defaults at session-creation time without
+    34	// having to construct a full kernel policy object up front.
+    35	type SessionOverrides struct {
+    36		ID        string
+    37		CreatedAt time.Time
+    38		Profile   *Profile
+    39		Policy    *replsession.SessionPolicy
+    40	}
+    41	
+    42	// Option mutates the app config during construction.
+    43	type Option func(*Config)
+    44	
+    45	// DefaultConfig preserves the prior replapi behavior: persistent and restore-aware.
+    46	func DefaultConfig() Config {
+    47		return ConfigForProfile(ProfilePersistent)
+    48	}
+    49	
+    50	// ConfigForProfile returns the preset config for one named profile.
+    51	func ConfigForProfile(profile Profile) Config {
+    52		switch profile {
+    53		case ProfileRaw:
+    54			return Config{
+    55				Profile:        ProfileRaw,
+    56				SessionOptions: replsession.RawSessionOptions(),
+    57			}
+    58		case ProfileInteractive:
+    59			return Config{
+    60				Profile:        ProfileInteractive,
+    61				SessionOptions: replsession.InteractiveSessionOptions(),
+    62			}
+    63		case ProfilePersistent:
+    64			fallthrough
+    65		default:
+    66			return Config{
+    67				Profile:        ProfilePersistent,
+    68				AutoRestore:    true,
+    69				SessionOptions: replsession.PersistentSessionOptions(),
+    70			}
+    71		}
+    72	}
+    73	
+    74	// RawConfig returns the preset config for near-straight-goja execution.
+    75	func RawConfig() Config {
+    76		return ConfigForProfile(ProfileRaw)
+    77	}
+    78	
+    79	// InteractiveConfig returns the preset config for in-memory REPL behavior.
+    80	func InteractiveConfig() Config {
+    81		return ConfigForProfile(ProfileInteractive)
+    82	}
+    83	
+    84	// PersistentConfig returns the preset config for durable restore-aware sessions.
+    85	func PersistentConfig(store *repldb.Store) Config {
+    86		config := ConfigForProfile(ProfilePersistent)
+    87		config.Store = store
+    88		return config
+    89	}
+    90	
+    91	// WithProfile applies one named profile preset.
+    92	func WithProfile(profile Profile) Option {
+    93		return func(config *Config) {
+    94			if config == nil {
+    95				return
+    96			}
+    97			next := ConfigForProfile(profile)
+    98			next.Store = config.Store
+    99			config.Profile = next.Profile
+   100			config.AutoRestore = next.AutoRestore
+   101			config.SessionOptions = next.SessionOptions
+   102		}
+   103	}
+   104	
+   105	// WithStore configures the durable SQLite store used by persistent sessions.
+   106	func WithStore(store *repldb.Store) Option {
+   107		return func(config *Config) {
+   108			if config == nil {
+   109				return
+   110			}
+   111			config.Store = store
+   112		}
+   113	}
+   114	
+   115	// WithAutoRestore overrides the profile default for on-demand restore behavior.
+   116	func WithAutoRestore(enabled bool) Option {
+   117		return func(config *Config) {
+   118			if config == nil {
+   119				return
+   120			}
+   121			config.AutoRestore = enabled
+   122		}
+   123	}
+   124	
+   125	// WithDefaultSessionOptions overrides the default per-session behavior.
+   126	func WithDefaultSessionOptions(opts replsession.SessionOptions) Option {
+   127		return func(config *Config) {
+   128			if config == nil {
+   129				return
+   130			}
+   131			config.SessionOptions = replsession.NormalizeSessionOptions(opts)
+   132		}
+   133	}
+   134	
+   135	// WithDefaultSessionPolicy overrides only the default session policy.
+   136	func WithDefaultSessionPolicy(policy replsession.SessionPolicy) Option {
+   137		return func(config *Config) {
+   138			if config == nil {
+   139				return
+   140			}
+   141			config.SessionOptions.Policy = replsession.NormalizeSessionPolicy(policy)
+   142		}
+   143	}
+   144	
+   145	func normalizeConfig(config Config) Config {
+   146		normalized := config
+   147		if normalized.Profile == "" {
+   148			defaults := DefaultConfig()
+   149			normalized.Profile = defaults.Profile
+   150			normalized.AutoRestore = defaults.AutoRestore
+   151			normalized.SessionOptions = defaults.SessionOptions
+   152		}
+   153		// Propagate Config.Profile into SessionOptions before normalizing
+   154		// so that NormalizeSessionOptions sees the correct profile and does
+   155		// not default it to "interactive".
+   156		if strings.TrimSpace(normalized.SessionOptions.Profile) == "" {
+   157			normalized.SessionOptions.Profile = string(normalized.Profile)
+   158		}
+   159		normalized.SessionOptions = replsession.NormalizeSessionOptions(normalized.SessionOptions)
+   160		return normalized
+   161	}
+   162	
+   163	func validateConfig(config Config) error {
+   164		normalized := normalizeConfig(config)
+   165		if normalized.AutoRestore && normalized.Store == nil {
+   166			return errors.New("replapi: auto-restore requires a store")
+   167		}
+   168		if normalized.SessionOptions.Policy.PersistenceEnabled() && normalized.Store == nil {
+   169			return errors.New("replapi: persistent session profile requires a store")
+   170		}
+
+== replsession persistent policy (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replsession/policy.go:1-145) ==
+     1	package replsession
+     2	
+     3	import (
+     4		"encoding/json"
+     5		"strings"
+     6		"time"
+     7	)
+     8	
+     9	// EvalMode controls how source is executed inside a session.
+    10	type EvalMode string
+    11	
+    12	const (
+    13		EvalModeRaw          EvalMode = "raw"
+    14		EvalModeInstrumented EvalMode = "instrumented"
+    15	)
+    16	
+    17	// EvalPolicy controls code transformation and await behavior.
+    18	type EvalPolicy struct {
+    19		Mode                  EvalMode `json:"mode"`
+    20		CaptureLastExpression bool     `json:"captureLastExpression"`
+    21		SupportTopLevelAwait  bool     `json:"supportTopLevelAwait"`
+    22		TimeoutMS             int64    `json:"timeoutMs,omitempty"`
+    23	}
+    24	
+    25	// ObservePolicy controls non-durable analysis and runtime introspection.
+    26	type ObservePolicy struct {
+    27		StaticAnalysis  bool `json:"staticAnalysis"`
+    28		RuntimeSnapshot bool `json:"runtimeSnapshot"`
+    29		BindingTracking bool `json:"bindingTracking"`
+    30		ConsoleCapture  bool `json:"consoleCapture"`
+    31		JSDocExtraction bool `json:"jsdocExtraction"`
+    32	}
+    33	
+    34	// PersistPolicy controls durable side effects to the session store.
+    35	type PersistPolicy struct {
+    36		Enabled         bool `json:"enabled"`
+    37		Evaluations     bool `json:"evaluations"`
+    38		BindingVersions bool `json:"bindingVersions"`
+    39		BindingDocs     bool `json:"bindingDocs"`
+    40	}
+    41	
+    42	// SessionPolicy is the full behavior policy for one session.
+    43	type SessionPolicy struct {
+    44		Eval    EvalPolicy    `json:"eval"`
+    45		Observe ObservePolicy `json:"observe"`
+    46		Persist PersistPolicy `json:"persist"`
+    47	}
+    48	
+    49	// SessionOptions configures one live REPL session.
+    50	type SessionOptions struct {
+    51		ID        string        `json:"id,omitempty"`
+    52		CreatedAt time.Time     `json:"createdAt,omitempty"`
+    53		Profile   string        `json:"profile,omitempty"`
+    54		Policy    SessionPolicy `json:"policy"`
+    55	}
+    56	
+    57	type sessionMetadata struct {
+    58		Profile string        `json:"profile,omitempty"`
+    59		Policy  SessionPolicy `json:"policy"`
+    60	}
+    61	
+    62	// RawSessionOptions returns a near-straight-goja execution policy.
+    63	func RawSessionOptions() SessionOptions {
+    64		return SessionOptions{
+    65			Profile: "raw",
+    66			Policy: SessionPolicy{
+    67				Eval: EvalPolicy{
+    68					Mode:      EvalModeRaw,
+    69					TimeoutMS: 5000,
+    70				},
+    71			},
+    72		}
+    73	}
+    74	
+    75	// InteractiveSessionOptions returns REPL-friendly in-memory behavior.
+    76	func InteractiveSessionOptions() SessionOptions {
+    77		return SessionOptions{
+    78			Profile: "interactive",
+    79			Policy: SessionPolicy{
+    80				Eval: EvalPolicy{
+    81					Mode:                  EvalModeInstrumented,
+    82					CaptureLastExpression: true,
+    83					SupportTopLevelAwait:  true,
+    84					TimeoutMS:             5000,
+    85				},
+    86				Observe: ObservePolicy{
+    87					StaticAnalysis:  true,
+    88					RuntimeSnapshot: true,
+    89					BindingTracking: true,
+    90					ConsoleCapture:  true,
+    91					JSDocExtraction: true,
+    92				},
+    93			},
+    94		}
+    95	}
+    96	
+    97	// PersistentSessionOptions returns the durable restore-aware session behavior.
+    98	func PersistentSessionOptions() SessionOptions {
+    99		ops := InteractiveSessionOptions()
+   100		ops.Profile = "persistent"
+   101		ops.Policy.Persist = PersistPolicy{
+   102			Enabled:         true,
+   103			Evaluations:     true,
+   104			BindingVersions: true,
+   105			BindingDocs:     true,
+   106		}
+   107		return ops
+   108	}
+   109	
+   110	// NormalizeSessionOptions applies defaults and sanitizes one options struct.
+   111	func NormalizeSessionOptions(opts SessionOptions) SessionOptions {
+   112		normalized := opts
+   113		normalized.Profile = strings.TrimSpace(normalized.Profile)
+   114		if normalized.Profile == "" {
+   115			normalized.Profile = "interactive"
+   116		}
+   117		normalized.Policy = NormalizeSessionPolicy(normalized.Policy)
+   118		return normalized
+   119	}
+   120	
+   121	// NormalizeSessionPolicy applies sensible defaults to partially populated policy values.
+   122	func NormalizeSessionPolicy(policy SessionPolicy) SessionPolicy {
+   123		normalized := policy
+   124		if normalized.Eval.Mode == "" {
+   125			normalized.Eval.Mode = EvalModeInstrumented
+   126		}
+   127		if normalized.Eval.TimeoutMS < 0 {
+   128			normalized.Eval.TimeoutMS = 0
+   129		}
+   130		return normalized
+   131	}
+   132	
+   133	// Timeout returns the configured evaluation deadline.
+   134	func (p EvalPolicy) Timeout() time.Duration {
+   135		if p.TimeoutMS <= 0 {
+   136			return 0
+   137		}
+   138		return time.Duration(p.TimeoutMS) * time.Millisecond
+   139	}
+   140	
+   141	// IsZero reports whether no explicit policy fields were set.
+   142	func (p SessionPolicy) IsZero() bool {
+   143		return p == (SessionPolicy{})
+   144	}
+   145	
+
+== replsession service persistence and session creation (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replsession/service.go:40-180) ==
+    40		sessions           map[string]*sessionState
+    41		defaultSessionOpts SessionOptions
+    42	}
+    43	
+    44	type sessionState struct {
+    45		id          string
+    46		profile     string
+    47		policy      SessionPolicy
+    48		createdAt   time.Time
+    49		runtime     *engine.Runtime
+    50		logger      zerolog.Logger
+    51		mu          sync.Mutex
+    52		nextCellID  int
+    53		cells       []*cellState
+    54		bindings    map[string]*bindingState
+    55		consoleSink []ConsoleEvent
+    56		ignored     map[string]struct{}
+    57	}
+    58	
+    59	type cellState struct {
+    60		report   *CellReport
+    61		analysis *jsparse.AnalysisResult
+    62	}
+    63	
+    64	type bindingState struct {
+    65		Name            string
+    66		Kind            jsparse.BindingKind
+    67		Origin          string
+    68		DeclaredInCell  int
+    69		LastUpdatedCell int
+    70		DeclaredLine    int
+    71		DeclaredSnippet string
+    72		Static          *BindingStaticView
+    73		Runtime         BindingRuntimeView
+    74	}
+    75	
+    76	// Persistence is the durable write surface used by the session service.
+    77	type Persistence interface {
+    78		CreateSession(ctx context.Context, record repldb.SessionRecord) error
+    79		DeleteSession(ctx context.Context, sessionID string, deletedAt time.Time) error
+    80		PersistEvaluation(ctx context.Context, record repldb.EvaluationRecord) error
+    81	}
+    82	
+    83	// Option configures a Service.
+    84	type Option func(*Service)
+    85	
+    86	// WithPersistence configures the service to persist sessions and evaluations.
+    87	func WithPersistence(store Persistence) Option {
+    88		return func(service *Service) {
+    89			service.store = store
+    90			service.defaultSessionOpts = PersistentSessionOptions()
+    91		}
+    92	}
+    93	
+    94	// WithDefaultSessionOptions configures the default options used by CreateSession.
+    95	func WithDefaultSessionOptions(opts SessionOptions) Option {
+    96		return func(service *Service) {
+    97			service.defaultSessionOpts = NormalizeSessionOptions(opts)
+    98		}
+    99	}
+   100	
+   101	// NewService creates a new session service backed by the supplied runtime factory.
+   102	func NewService(factory *engine.Factory, logger zerolog.Logger, opts ...Option) *Service {
+   103		if factory == nil {
+   104			panic("replsession: factory is nil")
+   105		}
+   106		service := &Service{
+   107			factory:            factory,
+   108			logger:             logger,
+   109			sessions:           map[string]*sessionState{},
+   110			defaultSessionOpts: InteractiveSessionOptions(),
+   111		}
+   112		for _, opt := range opts {
+   113			if opt != nil {
+   114				opt(service)
+   115			}
+   116		}
+   117		return service
+   118	}
+   119	
+   120	// CreateSession allocates a fresh runtime using the service defaults and returns its initial summary.
+   121	func (s *Service) CreateSession(ctx context.Context) (*SessionSummary, error) {
+   122		return s.CreateSessionWithOptions(ctx, SessionOptions{})
+   123	}
+   124	
+   125	// CreateSessionWithOptions allocates a fresh runtime using explicit session options.
+   126	func (s *Service) CreateSessionWithOptions(ctx context.Context, opts SessionOptions) (*SessionSummary, error) {
+   127		resolved := s.resolveSessionOptions(opts)
+   128		if resolved.Policy.PersistenceEnabled() && s.store == nil {
+   129			return nil, errors.New("create session: persistence enabled but no store configured")
+   130		}
+   131	
+   132		id := strings.TrimSpace(resolved.ID)
+   133		explicitID := id != ""
+   134		if id == "" {
+   135			id = newDefaultSessionID()
+   136		}
+   137		if explicitID {
+   138			s.mu.RLock()
+   139			_, exists := s.sessions[id]
+   140			s.mu.RUnlock()
+   141			if exists {
+   142				return nil, errors.Errorf("create session: session %q already exists", id)
+   143			}
+   144		}
+   145	
+   146		rt, err := s.factory.NewRuntime(ctx)
+   147		if err != nil {
+   148			return nil, errors.Wrap(err, "create runtime")
+   149		}
+   150		createdAt := resolved.CreatedAt.UTC()
+   151		if createdAt.IsZero() {
+   152			createdAt = time.Now().UTC()
+   153		}
+   154		state := &sessionState{
+   155			id:        id,
+   156			profile:   resolved.Profile,
+   157			policy:    NormalizeSessionPolicy(resolved.Policy),
+   158			createdAt: createdAt,
+   159			runtime:   rt,
+   160			logger:    s.logger.With().Str("session", id).Logger(),
+   161			bindings:  map[string]*bindingState{},
+   162			ignored:   map[string]struct{}{},
+   163		}
+   164		if state.policy.Observe.ConsoleCapture {
+   165			if err := state.installConsoleCapture(ctx); err != nil {
+   166				_ = rt.Close(ctx)
+   167				return nil, errors.Wrap(err, "install console capture")
+   168			}
+   169		}
+   170		if state.policy.Observe.JSDocExtraction {
+   171			if err := state.installDocSentinels(ctx); err != nil {
+   172				_ = rt.Close(ctx)
+   173				return nil, errors.Wrap(err, "install doc sentinels")
+   174			}
+   175		}
+   176		if state.policy.Persist.Enabled {
+   177			metadataJSON, err := resolved.SessionMetadataJSON()
+   178			if err != nil {
+   179				_ = rt.Close(ctx)
+   180				return nil, errors.Wrap(err, "persist session metadata")
+
+== replsession persistCell writes evaluation records (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replsession/persistence.go:1-95) ==
+     1	package replsession
+     2	
+     3	import (
+     4		"context"
+     5		"crypto/sha256"
+     6		"encoding/hex"
+     7		"encoding/json"
+     8		"fmt"
+     9		"sort"
+    10		"strings"
+    11		"time"
+    12	
+    13		"github.com/dop251/goja"
+    14		inspectorruntime "github.com/go-go-golems/go-go-goja/pkg/inspector/runtime"
+    15		"github.com/go-go-golems/go-go-goja/pkg/jsdoc/extract"
+    16		"github.com/go-go-golems/go-go-goja/pkg/repldb"
+    17		"github.com/pkg/errors"
+    18	)
+    19	
+    20	func (s *Service) persistCell(ctx context.Context, state *sessionState, cell *CellReport) error {
+    21		if s.store == nil || state == nil || !state.policy.Persist.Enabled || !state.policy.Persist.Evaluations {
+    22			return nil
+    23		}
+    24		if state == nil || cell == nil {
+    25			return errors.New("persist cell: state or cell is nil")
+    26		}
+    27	
+    28		resultJSON, err := json.Marshal(cell)
+    29		if err != nil {
+    30			return errors.Wrap(err, "persist cell: marshal cell report")
+    31		}
+    32		analysisJSON, err := json.Marshal(cell.Static)
+    33		if err != nil {
+    34			return errors.Wrap(err, "persist cell: marshal static report")
+    35		}
+    36		globalsBeforeJSON, err := json.Marshal(cell.Runtime.BeforeGlobals)
+    37		if err != nil {
+    38			return errors.Wrap(err, "persist cell: marshal globals before")
+    39		}
+    40		globalsAfterJSON, err := json.Marshal(cell.Runtime.AfterGlobals)
+    41		if err != nil {
+    42			return errors.Wrap(err, "persist cell: marshal globals after")
+    43		}
+    44	
+    45		consoleEvents := make([]repldb.ConsoleEventRecord, 0, len(cell.Execution.Console))
+    46		for idx, event := range cell.Execution.Console {
+    47			consoleEvents = append(consoleEvents, repldb.ConsoleEventRecord{
+    48				Stream: event.Kind,
+    49				Seq:    idx + 1,
+    50				Text:   event.Message,
+    51			})
+    52		}
+    53		bindingVersions, bindingDocs, err := s.bindingPersistenceRecords(ctx, state, cell)
+    54		if err != nil {
+    55			return err
+    56		}
+    57	
+    58		if err := s.store.PersistEvaluation(ctx, repldb.EvaluationRecord{
+    59			SessionID:         state.id,
+    60			CellID:            cell.ID,
+    61			CreatedAt:         cell.CreatedAt,
+    62			RawSource:         cell.Source,
+    63			RewrittenSource:   cell.Rewrite.TransformedSource,
+    64			OK:                cell.Execution.Status == "ok",
+    65			ResultJSON:        resultJSON,
+    66			ErrorText:         cell.Execution.Error,
+    67			AnalysisJSON:      analysisJSON,
+    68			GlobalsBeforeJSON: globalsBeforeJSON,
+    69			GlobalsAfterJSON:  globalsAfterJSON,
+    70			ConsoleEvents:     consoleEvents,
+    71			BindingVersions:   bindingVersions,
+    72			BindingDocs:       bindingDocs,
+    73		}); err != nil {
+    74			return errors.Wrap(err, "persist cell: write evaluation")
+    75		}
+    76	
+    77		return nil
+    78	}
+    79	
+    80	func (s *Service) bindingPersistenceRecords(ctx context.Context, state *sessionState, cell *CellReport) ([]repldb.BindingVersionRecord, []repldb.BindingDocRecord, error) {
+    81		docRecords := []repldb.BindingDocRecord{}
+    82		docDigests := map[string]string{}
+    83		var err error
+    84		if state.policy.Persist.BindingDocs && state.policy.Observe.JSDocExtraction {
+    85			docRecords, docDigests, err = extractBindingDocs(cell)
+    86			if err != nil {
+    87				return nil, nil, err
+    88			}
+    89		}
+    90	
+    91		if !state.policy.Persist.BindingVersions {
+    92			return nil, docRecords, nil
+    93		}
+    94	
+    95		changedNames := append([]string(nil), cell.Runtime.NewBindings...)
+
+== repldb SQLite schema (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/repldb/schema.go:1-90) ==
+     1	package repldb
+     2	
+     3	func schemaStatements() []string {
+     4		return []string{
+     5			`CREATE TABLE IF NOT EXISTS repldb_meta (
+     6				key TEXT PRIMARY KEY,
+     7				value TEXT NOT NULL
+     8			);`,
+     9			`CREATE TABLE IF NOT EXISTS sessions (
+    10				session_id TEXT PRIMARY KEY,
+    11				created_at TEXT NOT NULL,
+    12				updated_at TEXT NOT NULL,
+    13				deleted_at TEXT,
+    14				engine_kind TEXT NOT NULL,
+    15				metadata_json TEXT NOT NULL DEFAULT '{}'
+    16			);`,
+    17			`CREATE TABLE IF NOT EXISTS evaluations (
+    18				evaluation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    19				session_id TEXT NOT NULL,
+    20				cell_id INTEGER NOT NULL,
+    21				created_at TEXT NOT NULL,
+    22				raw_source TEXT NOT NULL,
+    23				rewritten_source TEXT NOT NULL,
+    24				ok INTEGER NOT NULL,
+    25				result_json TEXT NOT NULL,
+    26				error_text TEXT NOT NULL DEFAULT '',
+    27				analysis_json TEXT NOT NULL,
+    28				globals_before_json TEXT NOT NULL,
+    29				globals_after_json TEXT NOT NULL,
+    30				FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+    31				UNIQUE(session_id, cell_id)
+    32			);`,
+    33			`CREATE TABLE IF NOT EXISTS console_events (
+    34				console_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    35				evaluation_id INTEGER NOT NULL,
+    36				stream TEXT NOT NULL,
+    37				seq INTEGER NOT NULL,
+    38				text TEXT NOT NULL,
+    39				FOREIGN KEY(evaluation_id) REFERENCES evaluations(evaluation_id),
+    40				UNIQUE(evaluation_id, seq)
+    41			);`,
+    42			`CREATE TABLE IF NOT EXISTS bindings (
+    43				binding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    44				session_id TEXT NOT NULL,
+    45				name TEXT NOT NULL,
+    46				created_at TEXT NOT NULL,
+    47				latest_evaluation_id INTEGER,
+    48				latest_cell_id INTEGER,
+    49				UNIQUE(session_id, name),
+    50				FOREIGN KEY(session_id) REFERENCES sessions(session_id),
+    51				FOREIGN KEY(latest_evaluation_id) REFERENCES evaluations(evaluation_id)
+    52			);`,
+    53			`CREATE TABLE IF NOT EXISTS binding_versions (
+    54				binding_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    55				binding_id INTEGER NOT NULL,
+    56				evaluation_id INTEGER NOT NULL,
+    57				cell_id INTEGER NOT NULL,
+    58				action TEXT NOT NULL,
+    59				runtime_type TEXT NOT NULL,
+    60				display_value TEXT NOT NULL,
+    61				summary_json TEXT NOT NULL,
+    62				export_kind TEXT NOT NULL,
+    63				export_json TEXT NOT NULL,
+    64				doc_digest TEXT NOT NULL DEFAULT '',
+    65				FOREIGN KEY(binding_id) REFERENCES bindings(binding_id),
+    66				FOREIGN KEY(evaluation_id) REFERENCES evaluations(evaluation_id),
+    67				UNIQUE(binding_id, evaluation_id)
+    68			);`,
+    69			`CREATE TABLE IF NOT EXISTS binding_docs (
+    70				binding_doc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    71				binding_id INTEGER NOT NULL,
+    72				evaluation_id INTEGER NOT NULL,
+    73				cell_id INTEGER NOT NULL,
+    74				symbol_name TEXT NOT NULL,
+    75				source_kind TEXT NOT NULL,
+    76				raw_doc TEXT NOT NULL,
+    77				normalized_json TEXT NOT NULL,
+    78				FOREIGN KEY(binding_id) REFERENCES bindings(binding_id),
+    79				FOREIGN KEY(evaluation_id) REFERENCES evaluations(evaluation_id)
+    80			);`,
+    81			`CREATE INDEX IF NOT EXISTS idx_evaluations_session_id ON evaluations(session_id);`,
+    82			`CREATE INDEX IF NOT EXISTS idx_console_events_evaluation_id ON console_events(evaluation_id);`,
+    83			`CREATE INDEX IF NOT EXISTS idx_bindings_session_id ON bindings(session_id);`,
+    84			`CREATE INDEX IF NOT EXISTS idx_binding_versions_binding_id ON binding_versions(binding_id);`,
+    85			`CREATE INDEX IF NOT EXISTS idx_binding_versions_evaluation_id ON binding_versions(evaluation_id);`,
+    86			`CREATE INDEX IF NOT EXISTS idx_binding_docs_binding_id ON binding_docs(binding_id);`,
+    87			`CREATE INDEX IF NOT EXISTS idx_binding_docs_evaluation_id ON binding_docs(evaluation_id);`,
+    88		}
+    89	}
+
+== repldb CreateSession and PersistEvaluation (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/repldb/write.go:1-145) ==
+     1	package repldb
+     2	
+     3	import (
+     4		"context"
+     5		"database/sql"
+     6		"encoding/json"
+     7		"strings"
+     8		"time"
+     9	
+    10		"github.com/pkg/errors"
+    11	)
+    12	
+    13	// CreateSession inserts a durable session row.
+    14	func (s *Store) CreateSession(ctx context.Context, record SessionRecord) error {
+    15		if s == nil || s.db == nil {
+    16			return errors.New("create session: store is nil")
+    17		}
+    18		if strings.TrimSpace(record.SessionID) == "" {
+    19			return errors.New("create session: session id is empty")
+    20		}
+    21		if err := ctx.Err(); err != nil {
+    22			return err
+    23		}
+    24	
+    25		createdAt := normalizeTime(record.CreatedAt)
+    26		updatedAt := normalizeTime(record.UpdatedAt)
+    27		if updatedAt.IsZero() {
+    28			updatedAt = createdAt
+    29		}
+    30		if updatedAt.IsZero() {
+    31			updatedAt = time.Now().UTC()
+    32		}
+    33		if createdAt.IsZero() {
+    34			createdAt = updatedAt
+    35		}
+    36		engineKind := strings.TrimSpace(record.EngineKind)
+    37		if engineKind == "" {
+    38			engineKind = "goja"
+    39		}
+    40	
+    41		_, err := s.db.ExecContext(
+    42			ctx,
+    43			`INSERT INTO sessions(session_id, created_at, updated_at, deleted_at, engine_kind, metadata_json)
+    44			 VALUES(?, ?, ?, ?, ?, ?)`,
+    45			record.SessionID,
+    46			createdAt.Format(time.RFC3339Nano),
+    47			updatedAt.Format(time.RFC3339Nano),
+    48			formatNullableTime(record.DeletedAt),
+    49			engineKind,
+    50			jsonOrDefault(record.MetadataJSON, `{}`),
+    51		)
+    52		if err != nil {
+    53			return errors.Wrap(err, "create session")
+    54		}
+    55	
+    56		return nil
+    57	}
+    58	
+    59	// DeleteSession records durable deletion metadata for a session.
+    60	func (s *Store) DeleteSession(ctx context.Context, sessionID string, deletedAt time.Time) error {
+    61		if s == nil || s.db == nil {
+    62			return errors.New("delete session: store is nil")
+    63		}
+    64		if strings.TrimSpace(sessionID) == "" {
+    65			return errors.New("delete session: session id is empty")
+    66		}
+    67		if err := ctx.Err(); err != nil {
+    68			return err
+    69		}
+    70	
+    71		deletedAt = normalizeTime(deletedAt)
+    72		if deletedAt.IsZero() {
+    73			deletedAt = time.Now().UTC()
+    74		}
+    75		_, err := s.db.ExecContext(
+    76			ctx,
+    77			`UPDATE sessions
+    78			 SET deleted_at = ?, updated_at = ?
+    79			 WHERE session_id = ?`,
+    80			deletedAt.Format(time.RFC3339Nano),
+    81			deletedAt.Format(time.RFC3339Nano),
+    82			sessionID,
+    83		)
+    84		if err != nil {
+    85			return errors.Wrap(err, "delete session")
+    86		}
+    87	
+    88		return nil
+    89	}
+    90	
+    91	// PersistEvaluation writes an evaluation and its child rows in one transaction.
+    92	func (s *Store) PersistEvaluation(ctx context.Context, record EvaluationRecord) error {
+    93		if s == nil || s.db == nil {
+    94			return errors.New("persist evaluation: store is nil")
+    95		}
+    96		if strings.TrimSpace(record.SessionID) == "" {
+    97			return errors.New("persist evaluation: session id is empty")
+    98		}
+    99		if record.CellID <= 0 {
+   100			return errors.New("persist evaluation: cell id must be positive")
+   101		}
+   102		if err := ctx.Err(); err != nil {
+   103			return err
+   104		}
+   105	
+   106		tx, err := s.db.BeginTx(ctx, nil)
+   107		if err != nil {
+   108			return errors.Wrap(err, "persist evaluation: begin tx")
+   109		}
+   110		defer func() { _ = tx.Rollback() }()
+   111	
+   112		evaluationID, err := insertEvaluationTx(ctx, tx, record)
+   113		if err != nil {
+   114			return err
+   115		}
+   116		if err := insertConsoleEventsTx(ctx, tx, evaluationID, record.ConsoleEvents); err != nil {
+   117			return err
+   118		}
+   119		if err := insertBindingVersionsTx(ctx, tx, record, evaluationID); err != nil {
+   120			return err
+   121		}
+   122		if err := insertBindingDocsTx(ctx, tx, record, evaluationID); err != nil {
+   123			return err
+   124		}
+   125		if _, err := tx.ExecContext(
+   126			ctx,
+   127			`UPDATE sessions
+   128			 SET updated_at = ?
+   129			 WHERE session_id = ?`,
+   130			normalizeTime(record.CreatedAt).Format(time.RFC3339Nano),
+   131			record.SessionID,
+   132		); err != nil {
+   133			return errors.Wrap(err, "persist evaluation: update session timestamp")
+   134		}
+   135	
+   136		if err := tx.Commit(); err != nil {
+   137			return errors.Wrap(err, "persist evaluation: commit tx")
+   138		}
+   139	
+   140		return nil
+   141	}
+   142	
+   143	func insertEvaluationTx(ctx context.Context, tx *sql.Tx, record EvaluationRecord) (int64, error) {
+   144		result, err := tx.ExecContext(
+   145			ctx,
