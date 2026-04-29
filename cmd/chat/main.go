@@ -43,38 +43,9 @@ type settings struct {
 
 func main() {
 	ctx := context.Background()
-	var s settings
-	cmd := &cobra.Command{
-		Use:   "chat",
-		Short: "Simple Geppetto chat REPL with an eval_js documentation tool",
-		Long: `chat is a minimal stdin/stdout LLM chatbot.
-
-It resolves standard Pinocchio profiles, embeds its own Glazed help entries into
-an input SQLite database, exposes inputDB/outputDB globals to a go-go-goja
-runtime, and registers a single Geppetto tool named eval_js.`,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return logging.InitLoggerFromCobra(cmd)
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(ctx, s, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
-		},
-	}
-	cmd.Flags().StringVar(&s.ConfigFile, "config-file", "", "Explicit Pinocchio config/profile file")
-	cmd.Flags().StringVar(&s.Profile, "profile", "", "Pinocchio profile to load")
-	cmd.Flags().StringArrayVar(&s.ProfileRegistries, "profile-registries", nil, "Profile registry source (repeatable)")
-	cmd.Flags().StringVar(&s.InputDBPath, "input-db", "", "Optional path for materialized embedded help input DB")
-	cmd.Flags().StringVar(&s.OutputDBPath, "output-db", "", "Optional path for writable scratch output DB")
-	cmd.Flags().DurationVar(&s.EvalTimeout, "eval-timeout", 5*time.Second, "eval_js execution timeout")
-	cmd.Flags().IntVar(&s.MaxOutputChars, "max-output-chars", 16000, "maximum string/console output characters returned by eval_js")
-	cmd.Flags().StringVar(&s.LogDBPath, "log-db", "", "Path for the private host-only logging DB (defaults to a temp SQLite DB)")
-	cmd.Flags().BoolVar(&s.LogDBStrict, "log-db-strict", false, "Fail the chat run if private logging persistence fails")
-	cmd.Flags().BoolVar(&s.NoLogDB, "no-log-db", false, "Disable private DB logging and eval_js persistence")
-	cmd.Flags().BoolVar(&s.LogDBKeepTemp, "log-db-keep-temp", false, "Keep the default temporary log DB after exit")
-	cmd.Flags().BoolVar(&s.LogDBTurnSnapshots, "log-db-turn-snapshots", false, "Persist intermediate turn snapshots in addition to final turns")
-	cmd.Flags().BoolVar(&s.StreamStdout, "stream", true, "Stream assistant/tool progress to stdout while inference runs")
-	cmd.Flags().BoolVar(&s.PrintFinalTurn, "print-final-turn", false, "Print the full final turn after completion, even when streaming")
-	cmd.Flags().BoolVar(&s.StreamToolDetails, "stream-tool-details", true, "Print expanded streaming tool call code and tool results")
-	cmd.Flags().IntVar(&s.StreamMaxPreviewChars, "stream-max-preview-chars", 4000, "Maximum characters for streamed tool args/results previews")
+	cmd := newRootCommand(ctx)
+	cmd.AddCommand(newRunCommand(ctx))
+	cmd.AddCommand(newInspectCommand())
 
 	if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -92,6 +63,62 @@ runtime, and registers a single Geppetto tool named eval_js.`,
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func newRootCommand(ctx context.Context) *cobra.Command {
+	return &cobra.Command{
+		Use:   "chat",
+		Short: "Geppetto chat REPL with persistent eval_js tooling",
+		Long: `chat is a stdin/stdout LLM chatbot and inspection CLI.
+
+Use "chat run" to start the REPL or execute a one-shot prompt. Use
+"chat inspect" to inspect private SQLite log databases after a run.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = args
+			return cmd.Help()
+		},
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return logging.InitLoggerFromCobra(cmd)
+		},
+	}
+}
+
+func newRunCommand(ctx context.Context) *cobra.Command {
+	var s settings
+	cmd := &cobra.Command{
+		Use:   "run [prompt...]",
+		Short: "Run the chat REPL or a one-shot prompt",
+		Long: `Run starts the chat REPL when no prompt is provided, or executes a
+one-shot prompt when positional arguments are given.
+
+Examples:
+  chat run --profile gpt-5-nano-low
+  chat run --log-db /tmp/chat.sqlite "List the embedded help topics"`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run(ctx, s, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
+	}
+	addRunFlags(cmd, &s)
+	return cmd
+}
+
+func addRunFlags(cmd *cobra.Command, s *settings) {
+	cmd.Flags().StringVar(&s.ConfigFile, "config-file", "", "Explicit Pinocchio config/profile file")
+	cmd.Flags().StringVar(&s.Profile, "profile", "", "Pinocchio profile to load")
+	cmd.Flags().StringArrayVar(&s.ProfileRegistries, "profile-registries", nil, "Profile registry source (repeatable)")
+	cmd.Flags().StringVar(&s.InputDBPath, "input-db", "", "Optional path for materialized embedded help input DB")
+	cmd.Flags().StringVar(&s.OutputDBPath, "output-db", "", "Optional path for writable scratch output DB")
+	cmd.Flags().DurationVar(&s.EvalTimeout, "eval-timeout", 5*time.Second, "eval_js execution timeout")
+	cmd.Flags().IntVar(&s.MaxOutputChars, "max-output-chars", 16000, "maximum string/console output characters returned by eval_js")
+	cmd.Flags().StringVar(&s.LogDBPath, "log-db", "", "Path for the private host-only logging DB (defaults to a temp SQLite DB)")
+	cmd.Flags().BoolVar(&s.LogDBStrict, "log-db-strict", false, "Fail the chat run if private logging persistence fails")
+	cmd.Flags().BoolVar(&s.NoLogDB, "no-log-db", false, "Disable private DB logging and eval_js persistence")
+	cmd.Flags().BoolVar(&s.LogDBKeepTemp, "log-db-keep-temp", false, "Keep the default temporary log DB after exit")
+	cmd.Flags().BoolVar(&s.LogDBTurnSnapshots, "log-db-turn-snapshots", false, "Persist intermediate turn snapshots in addition to final turns")
+	cmd.Flags().BoolVar(&s.StreamStdout, "stream", true, "Stream assistant/tool/thinking progress to stdout while inference runs")
+	cmd.Flags().BoolVar(&s.PrintFinalTurn, "print-final-turn", false, "Print the full final turn after completion, even when streaming")
+	cmd.Flags().BoolVar(&s.StreamToolDetails, "stream-tool-details", true, "Print expanded streaming tool call code and tool results")
+	cmd.Flags().IntVar(&s.StreamMaxPreviewChars, "stream-max-preview-chars", 4000, "Maximum characters for streamed tool args/results previews")
 }
 
 func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Writer, errOut io.Writer) error {

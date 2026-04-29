@@ -5,9 +5,10 @@ go 1.26.1
 require (
 	github.com/go-go-golems/geppetto v0.11.14
 	github.com/go-go-golems/glazed v1.2.5
-	github.com/go-go-golems/go-go-goja v0.4.8
+	github.com/go-go-golems/go-go-goja v0.4.10
 	github.com/go-go-golems/pinocchio v0.0.0
 	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -106,7 +107,6 @@ require (
 	github.com/richardlehane/mscfb v1.0.4 // indirect
 	github.com/richardlehane/msoleps v1.0.4 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/rs/zerolog v1.35.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/sashabaranov/go-openai v1.41.1 // indirect
