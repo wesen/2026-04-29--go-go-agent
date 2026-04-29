@@ -163,3 +163,61 @@ This step also required changing `internal/evaljs` from owning a direct scoped e
 - App-owned tables: `chat_log_sessions`, `eval_tool_calls`.
 - Existing tables initialized into the same file: Pinocchio `turns`, `blocks`, `turn_block_membership`; repldb `sessions`, `evaluations`, `console_events`, `bindings`, `binding_versions`, `binding_docs`.
 - Successful validation command: `go test ./internal/evaljs ./internal/logdb ./cmd/chat`.
+
+## Step 3: Validate replapi-backed eval_js behavior directly
+
+After the lifecycle scaffold was in place, I moved to task 11 and tested the actual replapi-backed `eval_js` path. The tests execute JavaScript through `DB.EvalTool().Eval`, not through the old scoped executor, and assert both the model-facing payload and the private database side effects.
+
+This confirmed that the wrapper convention works for normal JSON-serializable returns, console output is surfaced, repldb receives an `evaluations` row, and the app-owned `eval_tool_calls` correlation table receives a matching row.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 1)
+
+**Assistant interpretation:** Continue through the implementation tasks in order, validating each completed behavior before committing.
+
+**Inferred user intent:** Ensure the replapi replacement is real and tested, not only wired by type signatures.
+
+**Commit (code):** a45a973a1ab1531934f1a63bcee4ede604a1f9cf — "Test replapi-backed eval tool persistence"
+
+### What I did
+- Added `internal/logdb/eval_tool_test.go`.
+- Tested a successful eval that queries `inputDB`, logs to console, writes to `outputDB`, and returns a structured object.
+- Tested a read-only violation against `inputDB.exec("DELETE FROM sections")` and verified it returns an error payload rather than a Go host error.
+- Asserted repldb `evaluations` rows and app-owned `eval_tool_calls` rows are written.
+- Ran `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.
+- Checked docmgr task 11.
+
+### Why
+- The design requires no backwards-compatible scoped executor path, so direct tests must prove replapi/replsession executes the JavaScript and persists the history.
+- The tool should communicate JavaScript errors to the model as data while still logging them.
+
+### What worked
+- The wrapper source using `JSON.stringify({ result: __chat_eval_result })` decoded correctly into `EvalOutput.Result`.
+- `replsession.ExecutionReport.Result` was directly decodable for the successful test case.
+- Console output arrived in `EvalOutput.Console`.
+- Both success and error paths wrote `eval_tool_calls` rows.
+
+### What didn't work
+- N/A in this step; the direct eval tests passed on the first run after formatting.
+
+### What I learned
+- The JSON wrapper convention is viable for the current replsession result behavior.
+- The read-only facade error becomes a model-visible payload while still producing correlation data.
+
+### What was tricky to build
+- The test has to exercise the host-private DB without exposing it to JavaScript. It verifies persistence through SQL queries against `ReplStore.DB()` after eval rather than by making any log DB global visible in JS.
+
+### What warrants a second pair of eyes
+- The current result converter still includes an unquote fallback. Review whether this is desirable or whether strict direct JSON decoding is preferable.
+- The error path should be reviewed against Geppetto expectations: returning `EvalOutput{Error: ...}, nil` means the tool call itself succeeds from the tool-loop perspective.
+
+### What should be done in the future
+- Add tests for non-JSON-serializable return values and thrown JavaScript exceptions if they are not covered by broader task 13.
+
+### Code review instructions
+- Review `internal/logdb/eval_tool_test.go` alongside `internal/logdb/eval_tool.go`.
+- Validate with `go test ./internal/logdb -run 'TestEvalTool' -count=1 -v` or the broader package set.
+
+### Technical details
+- Successful validation command: `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.

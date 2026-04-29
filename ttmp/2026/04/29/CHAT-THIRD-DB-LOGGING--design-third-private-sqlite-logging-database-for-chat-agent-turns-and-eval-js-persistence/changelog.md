@@ -26,3 +26,22 @@ Completed task 10 private log DB lifecycle and replapi session scaffolding (comm
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/logdb.go — Private log DB lifecycle and schema setup
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/logdb_test.go — Schema/session setup coverage
 
+
+## 2026-04-29
+
+Completed task 11 by adding replapi-backed eval_js execution tests and validating repldb plus eval_tool_calls persistence.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go — Replapi-backed eval_js implementation
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool_test.go — Direct success/error persistence tests
+
+
+## 2026-04-29
+
+Completed task 11 eval_js replapi behavior test coverage (commit a45a973a1ab1531934f1a63bcee4ede604a1f9cf).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool_test.go — Success/error eval_js persistence coverage
+
