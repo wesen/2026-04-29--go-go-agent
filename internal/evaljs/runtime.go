@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-go-golems/geppetto/pkg/inference/runner"
 	geptools "github.com/go-go-golems/geppetto/pkg/inference/tools"
 	"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
 	"github.com/go-go-golems/go-go-agent/internal/jsdb"
+	gojengine "github.com/go-go-golems/go-go-goja/engine"
 )
 
 const ToolName = "eval_js"
@@ -23,9 +25,17 @@ type Meta struct {
 	Globals []string
 }
 
+type EvalInput = scopedjs.EvalInput
+type EvalOutput = scopedjs.EvalOutput
+type ConsoleLine = scopedjs.ConsoleLine
+
+type EvalTool interface {
+	Eval(ctx context.Context, in EvalInput) (EvalOutput, error)
+}
+
 type Runtime struct {
-	Spec   scopedjs.EnvironmentSpec[Scope, Meta]
-	Handle *scopedjs.BuildResult[Meta]
+	Spec scopedjs.EnvironmentSpec[Scope, Meta]
+	Tool EvalTool
 }
 
 type Options struct {
@@ -33,30 +43,56 @@ type Options struct {
 	MaxOutputChars int
 }
 
-func Build(ctx context.Context, scope Scope, opts Options) (*Runtime, error) {
-	spec := NewSpec(opts)
-	handle, err := scopedjs.BuildRuntime(ctx, spec, scope)
-	if err != nil {
-		return nil, err
+type BuildOption func(*buildConfig)
+
+type buildConfig struct {
+	evalTool EvalTool
+}
+
+func WithEvalTool(tool EvalTool) BuildOption {
+	return func(c *buildConfig) { c.evalTool = tool }
+}
+
+func Build(ctx context.Context, scope Scope, opts Options, buildOpts ...BuildOption) (*Runtime, error) {
+	_ = ctx
+	cfg := buildConfig{}
+	for _, opt := range buildOpts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
-	return &Runtime{Spec: spec, Handle: handle}, nil
+	if cfg.evalTool == nil {
+		return nil, fmt.Errorf("eval_js requires a replapi-backed EvalTool")
+	}
+	return &Runtime{Spec: NewSpec(opts), Tool: cfg.evalTool}, nil
 }
 
 func (r *Runtime) Registrar() runner.ToolRegistrar {
 	return func(ctx context.Context, reg geptools.ToolRegistry) error {
-		if r == nil || r.Handle == nil {
-			return fmt.Errorf("eval_js runtime is not built")
+		_ = ctx
+		if r == nil || r.Tool == nil {
+			return fmt.Errorf("eval_js tool is not configured")
 		}
-		return scopedjs.RegisterPrebuilt(reg, r.Spec, r.Handle, scopedjs.EvalOptionOverrides{})
+		def, err := geptools.NewToolFromFunc(
+			r.Spec.Tool.Name,
+			scopedjs.BuildDescription(r.Spec.Tool.Description, Manifest(), "Calls execute in a persistent replapi/replsession session; runtime state and evaluation history persist across calls."),
+			func(ctx context.Context, in EvalInput) (EvalOutput, error) {
+				return r.Tool.Eval(ctx, in)
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("create %s tool: %w", r.Spec.Tool.Name, err)
+		}
+		def.Tags = append([]string(nil), r.Spec.Tool.Tags...)
+		def.Version = r.Spec.Tool.Version
+		if err := reg.RegisterTool(def.Name, *def); err != nil {
+			return fmt.Errorf("register %s tool: %w", r.Spec.Tool.Name, err)
+		}
+		return nil
 	}
 }
 
-func (r *Runtime) Close() error {
-	if r == nil || r.Handle == nil || r.Handle.Cleanup == nil {
-		return nil
-	}
-	return r.Handle.Cleanup()
-}
+func (r *Runtime) Close() error { return nil }
 
 func NewSpec(opts Options) scopedjs.EnvironmentSpec[Scope, Meta] {
 	evalOpts := scopedjs.DefaultEvalOptions()
@@ -93,6 +129,53 @@ func NewSpec(opts Options) scopedjs.EnvironmentSpec[Scope, Meta] {
 		DefaultEval: evalOpts,
 		Configure:   configureRuntime,
 	}
+}
+
+func NewEngineFactory(scope Scope) (*gojengine.Factory, error) {
+	return gojengine.NewBuilder().WithRuntimeInitializers(scopeInitializer{scope: scope}).Build()
+}
+
+func Manifest() scopedjs.EnvironmentManifest {
+	return scopedjs.EnvironmentManifest{
+		Globals: []scopedjs.GlobalDoc{
+			{Name: "inputDB", Type: "object", Description: "Read-only SQLite facade for embedded chat help entries. Methods: query(sql, ...args), exec(sql, ...args) which errors, schema()."},
+			{Name: "outputDB", Type: "object", Description: "Writable scratch SQLite facade. Methods: query(sql, ...args), exec(sql, ...args), schema(). Default table: notes."},
+		},
+		Helpers: []scopedjs.HelperDoc{
+			{Name: "parameterized SQL", Signature: `inputDB.query("SELECT * FROM docs WHERE slug = ?", slug)`, Description: "Use ? placeholders and pass bind arguments after the SQL string."},
+			{Name: "list help entries", Signature: `inputDB.query("SELECT slug, title, short FROM docs ORDER BY title")`, Description: "List embedded help entries available to the agent."},
+		},
+	}
+}
+
+type scopeInitializer struct{ scope Scope }
+
+func (s scopeInitializer) ID() string { return "chat-evaljs-scope" }
+
+func (s scopeInitializer) InitRuntime(ctx *gojengine.RuntimeContext) error {
+	input := &jsdb.Facade{Name: "inputDB", DB: s.scope.InputDB, Readonly: true, Tables: []string{"sections", "docs"}}
+	if err := bindFacade(ctx, "inputDB", input); err != nil {
+		return err
+	}
+	output := &jsdb.Facade{Name: "outputDB", DB: s.scope.OutputDB, Readonly: false, Tables: []string{"notes"}}
+	return bindFacade(ctx, "outputDB", output)
+}
+
+func bindFacade(ctx *gojengine.RuntimeContext, globalName string, f *jsdb.Facade) error {
+	if ctx == nil || ctx.VM == nil {
+		return fmt.Errorf("runtime context is nil")
+	}
+	obj := ctx.VM.NewObject()
+	if err := obj.Set("query", f.Query); err != nil {
+		return err
+	}
+	if err := obj.Set("exec", f.Exec); err != nil {
+		return err
+	}
+	if err := obj.Set("schema", f.Schema); err != nil {
+		return err
+	}
+	return ctx.VM.Set(globalName, obj)
 }
 
 func configureRuntime(ctx context.Context, b *scopedjs.Builder, scope Scope) (Meta, error) {
@@ -133,4 +216,11 @@ func configureRuntime(ctx context.Context, b *scopedjs.Builder, scope Scope) (Me
 	}
 
 	return Meta{Globals: []string{"inputDB", "outputDB"}}, nil
+}
+
+func trimPreview(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max]) + "…"
 }

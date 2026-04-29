@@ -2,78 +2,59 @@ package evaljs_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
 	"github.com/go-go-golems/go-go-agent/internal/evaljs"
-	"github.com/go-go-golems/go-go-agent/internal/helpdb"
-	"github.com/go-go-golems/go-go-agent/internal/helpdocs"
 )
 
-func TestEvalJSCanQueryEmbeddedHelpAndWriteOutput(t *testing.T) {
-	ctx := context.Background()
-	input, err := helpdb.PrepareInputDB(ctx, helpdb.InputDBConfig{HelpFS: helpdocs.FS, HelpDir: helpdocs.Dir})
-	if err != nil {
-		t.Fatalf("prepare input: %v", err)
-	}
-	defer input.Close()
-	output, err := helpdb.PrepareOutputDB(ctx, "")
-	if err != nil {
-		t.Fatalf("prepare output: %v", err)
-	}
-	defer output.Close()
+type fakeEvalTool struct{}
 
-	rt, err := evaljs.Build(ctx, evaljs.Scope{InputDB: input.DB, OutputDB: output.DB}, evaljs.Options{Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("build eval runtime: %v", err)
-	}
-	defer rt.Close()
+func (fakeEvalTool) Eval(ctx context.Context, in evaljs.EvalInput) (evaljs.EvalOutput, error) {
+	_ = ctx
+	return evaljs.EvalOutput{Result: map[string]any{"code": in.Code}}, nil
+}
 
-	out, err := rt.Handle.Executor.RunEval(ctx, scopedjs.EvalInput{Code: `
-const rows = inputDB.query("SELECT slug, title FROM docs WHERE slug = ?", "eval-js-api");
-outputDB.exec("INSERT INTO notes(key, value) VALUES (?, ?)", "seen", rows[0].slug);
-return {slug: rows[0].slug, notes: outputDB.query("SELECT key, value FROM notes")};
-`}, scopedjs.DefaultEvalOptions())
-	if err != nil {
-		t.Fatalf("RunEval returned error: %v", err)
-	}
-	if out.Error != "" {
-		t.Fatalf("eval error: %s", out.Error)
-	}
-	m, ok := out.Result.(map[string]any)
-	if !ok {
-		t.Fatalf("expected map result, got %T: %#v", out.Result, out.Result)
-	}
-	if got := m["slug"]; got != "eval-js-api" {
-		t.Fatalf("expected slug eval-js-api, got %#v", got)
+func TestBuildRequiresReplAPIBackedEvalTool(t *testing.T) {
+	_, err := evaljs.Build(context.Background(), evaljs.Scope{}, evaljs.Options{Timeout: time.Second})
+	if err == nil || !strings.Contains(err.Error(), "replapi-backed EvalTool") {
+		t.Fatalf("expected missing eval tool error, got %v", err)
 	}
 }
 
-func TestInputDBRejectsWrites(t *testing.T) {
-	ctx := context.Background()
-	input, err := helpdb.PrepareInputDB(ctx, helpdb.InputDBConfig{HelpFS: helpdocs.FS, HelpDir: helpdocs.Dir})
-	if err != nil {
-		t.Fatalf("prepare input: %v", err)
-	}
-	defer input.Close()
-	output, err := helpdb.PrepareOutputDB(ctx, "")
-	if err != nil {
-		t.Fatalf("prepare output: %v", err)
-	}
-	defer output.Close()
-
-	rt, err := evaljs.Build(ctx, evaljs.Scope{InputDB: input.DB, OutputDB: output.DB}, evaljs.Options{Timeout: time.Second})
+func TestBuildRegistersInjectedEvalToolContract(t *testing.T) {
+	rt, err := evaljs.Build(context.Background(), evaljs.Scope{}, evaljs.Options{Timeout: time.Second}, evaljs.WithEvalTool(fakeEvalTool{}))
 	if err != nil {
 		t.Fatalf("build eval runtime: %v", err)
 	}
 	defer rt.Close()
 
-	out, err := rt.Handle.Executor.RunEval(ctx, scopedjs.EvalInput{Code: `return inputDB.exec("DELETE FROM sections");`}, scopedjs.DefaultEvalOptions())
-	if err != nil {
-		t.Fatalf("RunEval returned error: %v", err)
+	if rt.Tool == nil {
+		t.Fatalf("expected injected eval tool")
 	}
-	if out.Error == "" {
-		t.Fatalf("expected read-only eval error")
+	out, err := rt.Tool.Eval(context.Background(), scopedjs.EvalInput{Code: `return 1;`})
+	if err != nil {
+		t.Fatalf("eval returned error: %v", err)
+	}
+	m, ok := out.Result.(map[string]any)
+	if !ok || m["code"] != `return 1;` {
+		t.Fatalf("unexpected result: %#v", out.Result)
+	}
+}
+
+func TestNewEngineFactoryExposesOnlyInputAndOutputGlobalsInManifest(t *testing.T) {
+	manifest := evaljs.Manifest()
+	var globals []string
+	for _, global := range manifest.Globals {
+		globals = append(globals, global.Name)
+	}
+	joined := strings.Join(globals, ",")
+	if !strings.Contains(joined, "inputDB") || !strings.Contains(joined, "outputDB") {
+		t.Fatalf("expected inputDB and outputDB globals, got %v", globals)
+	}
+	if strings.Contains(joined, "log") {
+		t.Fatalf("private log DB leaked into manifest globals: %v", globals)
 	}
 }
