@@ -16,10 +16,10 @@
 - [x] Decide final command location and name before coding.
 - [x] Decide whether `outputDB` is writable scratch, read-only comparison data, or a copy of `inputDB`.
 - [x] Confirm implementation scope: app binary named chat with embedded help entries only
-- [ ] Scaffold Go module and chat command skeleton
-- [ ] Embed programmatic Glazed help entries and materialize them into the input SQLite DB
-- [ ] Implement SQLite DB facades for JavaScript globals inputDB and outputDB
-- [ ] Implement scopedjs eval_js runtime/tool registrar
-- [ ] Wire Pinocchio profile resolution, Geppetto runner, and stdin/stdout REPL
-- [ ] Add unit/smoke tests for help DB materialization and eval_js DB access
-- [ ] Run formatting/tests, update diary/bookkeeping, and commit implementation
+- [x] Scaffold Go module and chat command skeleton
+- [x] Embed programmatic Glazed help entries and materialize them into the input SQLite DB
+- [x] Implement SQLite DB facades for JavaScript globals inputDB and outputDB
+- [x] Implement scopedjs eval_js runtime/tool registrar
+- [x] Wire Pinocchio profile resolution, Geppetto runner, and stdin/stdout REPL
+- [x] Add unit/smoke tests for help DB materialization and eval_js DB access
+- [x] Run formatting/tests, update diary/bookkeeping, and commit implementation

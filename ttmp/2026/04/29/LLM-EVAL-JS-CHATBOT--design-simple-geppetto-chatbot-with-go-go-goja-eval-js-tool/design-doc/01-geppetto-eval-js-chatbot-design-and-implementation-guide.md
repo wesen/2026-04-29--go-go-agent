@@ -27,12 +27,27 @@ RelatedFiles:
       Note: Defines preconfigured SQLite module behavior and JS query/exec API
     - Path: ../../../../../../../corporate-headquarters/pinocchio/pkg/cmds/profilebootstrap/profile_selection.go
       Note: Defines Pinocchio bootstrap wrappers for profile resolution
+    - Path: cmd/chat/main.go
+      Note: chat app command
+    - Path: internal/evaljs/runtime.go
+      Note: builds scopedjs runtime and registers eval_js
+    - Path: internal/helpdb/helpdb.go
+      Note: materializes embedded help sections into inputDB and creates outputDB scratch schema
+    - Path: internal/helpdocs/help/01-eval-js-api.md
+      Note: embedded eval_js API reference help entry
+    - Path: internal/helpdocs/help/02-database-globals.md
+      Note: embedded inputDB/outputDB API reference help entry
+    - Path: internal/helpdocs/help/03-chat-repl.md
+      Note: embedded chat REPL user guide help entry
+    - Path: internal/jsdb/facade.go
+      Note: binds query/exec/schema database facades as JavaScript globals
 ExternalSources: []
 Summary: Intern-facing design for a stdin/stdout Geppetto chatbot with a single eval_js tool backed by a go-go-goja runtime and two Glazed-help SQLite databases.
 LastUpdated: 2026-04-29T09:18:00-04:00
 WhatFor: Use this when implementing the first simple REPL chatbot that can query Glazed documentation databases through JavaScript.
 WhenToUse: Before writing the chatbot command, wiring Pinocchio profiles, or exposing SQLite-backed inputDB/outputDB globals to go-go-goja.
 ---
+
 
 
 # Geppetto eval_js chatbot design and implementation guide

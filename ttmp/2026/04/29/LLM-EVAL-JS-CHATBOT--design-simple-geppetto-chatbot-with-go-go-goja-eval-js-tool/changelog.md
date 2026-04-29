@@ -35,3 +35,14 @@ Added implementation tasks for the chat app scope: embedded help entries, inputD
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/reference/01-investigation-diary.md — Diary entry for implementation task planning
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/tasks.md — Implementation task checklist
 
+
+## 2026-04-29
+
+Implemented the chat prototype with embedded help entries, inputDB/outputDB JavaScript globals, scopedjs eval_js, Pinocchio profile resolution, Geppetto runner wiring, REPL, and tests (commit 15de510).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — chat command entrypoint
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/evaljs/runtime.go — eval_js runtime/tool implementation
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdb/helpdb.go — embedded help DB materialization
+

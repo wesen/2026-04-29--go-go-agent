@@ -13,6 +13,12 @@ DocType: reference
 Intent: long-term
 Owners: []
 RelatedFiles:
+    - Path: cmd/chat/main.go
+      Note: implemented chat binary in Step 6 (commit 15de510)
+    - Path: internal/evaljs/runtime_test.go
+      Note: eval_js smoke tests from Step 6 (commit 15de510)
+    - Path: internal/helpdb/helpdb_test.go
+      Note: embedded help DB tests from Step 6 (commit 15de510)
     - Path: ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/design-doc/01-geppetto-eval-js-chatbot-design-and-implementation-guide.md
       Note: Primary deliverable written during the documented investigation
     - Path: ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/scripts/01-inventory-and-evidence.sh
@@ -25,6 +31,7 @@ LastUpdated: 2026-04-29T09:20:00-04:00
 WhatFor: Use this to resume or audit the design investigation, including commands run, evidence gathered, and delivery steps.
 WhenToUse: When continuing implementation or reviewing how the design guide was produced.
 ---
+
 
 
 # Diary
@@ -513,4 +520,138 @@ Task creation command pattern:
 ```bash
 docmgr task add --ticket LLM-EVAL-JS-CHATBOT --text "..."
 docmgr task list --ticket LLM-EVAL-JS-CHATBOT
+```
+
+## Step 6: Implemented the first `chat` prototype
+
+I implemented the first working prototype of the `chat` app. The binary now embeds its own Glazed help entries, materializes them into a SQLite input DB at startup, creates a writable scratch output DB, binds both as JavaScript globals, registers a single `eval_js` tool through `scopedjs`, resolves standard Pinocchio profiles, and runs a simple stdin/stdout REPL through Geppetto's runner.
+
+This is the first code milestone for the ticket. It intentionally keeps the app self-contained: no external help pages are loaded and no `glaze help export` subprocess is needed for version 1.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 5)
+
+**Assistant interpretation:** Implement the planned `chat` app incrementally, using embedded help entries rather than external help sources.
+
+**Inferred user intent:** Produce a functional prototype that can later be expanded, while preserving clean commits and a detailed diary.
+
+**Commit (code):** `15de510d11b6509846604d6801e5e1f89afa4b69` — "Implement chat eval_js prototype"
+
+### What I did
+
+- Added a new Go module at the repo root with local `replace` directives to the corporate-headquarters checkouts.
+- Added `cmd/chat/main.go`:
+  - Cobra command named `chat`,
+  - flags for `--profile`, `--profile-registries`, `--config-file`, `--input-db`, `--output-db`, `--eval-timeout`, and `--max-output-chars`,
+  - Pinocchio profile resolution via `profilebootstrap.NewCLISelectionValues` and `profilebootstrap.ResolveCLIEngineSettings`,
+  - Geppetto `runner.Run` wiring,
+  - stdin/stdout REPL with `:help`, `:reset`, and `:quit`.
+- Added embedded help entries under `internal/helpdocs/help/`:
+  - `01-eval-js-api.md`,
+  - `02-database-globals.md`,
+  - `03-chat-repl.md`.
+- Added `internal/helpdb`:
+  - materializes embedded help entries through Glazed `help.NewHelpSystemWithStore(...).LoadSectionsFromFS(...)`,
+  - creates the `docs` compatibility view over Glazed's `sections` table,
+  - opens the materialized input DB read-only,
+  - creates a writable output DB with a `notes` scratch table.
+- Added `internal/jsdb`:
+  - JavaScript-facing `query`, `exec`, and `schema` methods,
+  - read-only guard for `inputDB`,
+  - lower-case JS method bindings via goja objects.
+- Added `internal/evaljs`:
+  - `scopedjs.EnvironmentSpec`,
+  - `inputDB` and `outputDB` globals,
+  - tool description and starter snippets,
+  - `runner.ToolRegistrar` for `eval_js`.
+- Added tests for:
+  - embedded help DB materialization,
+  - `docs` compatibility view,
+  - output scratch DB schema,
+  - direct `eval_js` query/write behavior,
+  - rejection of `inputDB.exec(...)` writes.
+
+### Why
+
+- The user clarified that version 1 should embed relevant API reference pages into the `chat` binary and register them programmatically into the input DB.
+- Keeping external sources out of v1 makes the prototype much smaller and easier to test.
+
+### What worked
+
+- `go mod tidy` completed after switching the module to the local dependencies' Go version.
+- `go test ./...` passed:
+  ```text
+  ?   	github.com/go-go-golems/go-go-agent/cmd/chat	[no test files]
+  ok  	github.com/go-go-golems/go-go-agent/internal/evaljs	0.072s
+  ok  	github.com/go-go-golems/go-go-agent/internal/helpdb	0.039s
+  ?   	github.com/go-go-golems/go-go-agent/internal/helpdocs	[no test files]
+  ?   	github.com/go-go-golems/go-go-agent/internal/jsdb	[no test files]
+  ```
+- `go run ./cmd/chat --help` printed the expected `chat` help text and flags.
+- The direct eval test confirmed JavaScript can query `inputDB.docs` and write to `outputDB.notes`.
+
+### What didn't work
+
+- The first implementation sketch tried to create the `docs` view through the Glazed store's unexported `*sql.DB`. That is not possible because `store.Store.db` is unexported.
+- I fixed this by closing the Glazed store after loading embedded help entries, reopening the SQLite file with `database/sql`, creating the compatibility view, closing that handle, and then reopening the DB read-only for `inputDB`.
+
+### What I learned
+
+- Embedded help registration is straightforward with Glazed's `LoadSectionsFromFS` once the binary provides an `embed.FS` and a help directory.
+- The app does not need to depend on `glaze help export` for v1; it only needs the same Glazed help store schema.
+- For goja globals, binding an explicit object with lower-case `query`, `exec`, and `schema` methods is clearer than exposing a Go struct directly.
+
+### What was tricky to build
+
+- The subtle part was the input DB lifecycle. Glazed's `store.Store` owns an unexported SQLite handle, but `eval_js` needs a `*sql.DB` handle for the JavaScript facade. The safe sequence is:
+  1. create the Glazed store at a file path,
+  2. load embedded help entries,
+  3. close the store,
+  4. open the file normally to create the `docs` view,
+  5. close that handle,
+  6. reopen the file in read-only mode for the JS runtime.
+
+### What warrants a second pair of eyes
+
+- The current REPL prints the full Turn with `turns.FprintTurn`; a later UX pass may want assistant-only output.
+- The current runtime uses a prebuilt `scopedjs` runtime, so JavaScript global state can persist across tool calls.
+- The `outputDB` scratch DB is process-local by default unless `--output-db` is provided.
+
+### What should be done in the future
+
+- Add an integration smoke test with a fake Geppetto engine if a convenient test engine exists.
+- Consider a `--print-dbs` or debug flag that prints materialized DB paths for inspection.
+- Update the design doc to mark embedded help registration as the implemented v1 path.
+
+### Code review instructions
+
+- Start at `cmd/chat/main.go` to see command wiring and REPL flow.
+- Then read `internal/helpdb/helpdb.go` for DB materialization.
+- Then read `internal/evaljs/runtime.go` and `internal/jsdb/facade.go` for JavaScript tool/global behavior.
+- Validate with:
+  ```bash
+  go test ./...
+  go run ./cmd/chat --help
+  ```
+
+### Technical details
+
+Commands run:
+
+```bash
+gofmt -w cmd/chat/main.go internal/helpdocs/docs.go internal/helpdb/helpdb.go internal/jsdb/facade.go internal/evaljs/runtime.go internal/helpdb/helpdb_test.go internal/evaljs/runtime_test.go
+go mod tidy
+go test ./...
+go run ./cmd/chat --help
+
+git add go.mod go.sum cmd internal
+git commit -m "Implement chat eval_js prototype"
+git rev-parse HEAD
+```
+
+Commit hash:
+
+```text
+15de510d11b6509846604d6801e5e1f89afa4b69
 ```
