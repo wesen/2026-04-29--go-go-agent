@@ -5,6 +5,18 @@ topics:
       description: Backend services
     - slug: websocket
       description: WebSocket lifecycle & events
+    - slug: geppetto
+      description: Geppetto LLM inference, tools, runner, profiles, and turn-based agent systems
+    - slug: glazed
+      description: Glazed CLI/help/documentation framework and structured output tooling
+    - slug: goja
+      description: goja JavaScript runtime integration and go-go-goja sandboxing
+    - slug: llm-tools
+      description: LLM tool-calling design, registration, execution, and safety
+    - slug: pinocchio
+      description: Pinocchio application profile bootstrap, chat, and runtime integration
+    - slug: sqlite
+      description: SQLite database schema, export, querying, and embedded data workflows
 docTypes:
     - slug: design-doc
       description: Structured rationale and architecture notes

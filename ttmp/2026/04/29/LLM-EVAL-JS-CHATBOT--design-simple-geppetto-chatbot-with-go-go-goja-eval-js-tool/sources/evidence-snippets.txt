@@ -1,0 +1,904 @@
+
+== go-go-goja runtime API and module flags (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/README.md:1-105) ==
+     1	# go-go-goja – Native-Module Playground for goja
+     2	
+     3	**go-go-goja** is a tiny sandbox project that shows how to wire Go-implemented "native" modules into a [dop251/goja] JavaScript runtime using the [goja_nodejs/require] subsystem.
+     4	
+     5	The goal is to have a place where you can:
+     6	
+     7	* add your own Go files under `modules/` and immediately use them from JS via `require("your-module")`
+     8	* experiment with goja + Node-style `require()` without having to set up a whole application
+     9	* open the canonical interactive prompt with `go run ./cmd/goja-repl tui`
+    10	* inspect and persist REPL sessions through the `goja-repl` CLI and JSON server surfaces
+    11	* compose runtime behavior explicitly via `engine.NewBuilder() -> Build() -> Factory.NewRuntime(...)`
+    12	
+    13	---
+    14	
+    15	## Folder layout
+    16	
+    17	```text
+    18	 go-go-goja/
+    19	 ├── cmd/
+    20	 │   ├── goja-repl/       # canonical REPL CLI, TUI, and JSON server
+    21	 │   └── bun-demo/        # bun-integrated demo command
+    22	 ├── engine/              # builder/factory/runtime ownership APIs
+    23	 ├── modules/             # ← add your Go-backed modules here
+    24	 │   ├── common.go        # registry plumbing (NativeModule, Register, …)
+    25	 │   ├── events/          # Go-native Node-style EventEmitter
+    26	 │   ├── fs/              # example module 1: basic file-system helpers
+    27	 │   ├── exec/            # example module 2: thin wrapper around os/exec
+    28	 │   ├── yaml/            # example module 3: YAML parse/stringify/validate
+    29	 ├── testdata/            # demo JS scripts used by Go tests
+    30	 ├── repl_test.go         # Go test that runs a JS script through the runner
+    31	 └── go.mod
+    32	```
+    33	
+    34	The canonical API is explicit runtime composition:
+    35	
+    36	1. create a builder (`engine.NewBuilder(...)`)
+    37	2. add module/runtime options (`WithModules(...)`, `WithRuntimeInitializers(...)`, ...)
+    38	3. build an immutable factory (`Build()`)
+    39	4. create an owned runtime (`factory.NewRuntime(ctx)`)
+    40	5. close runtime explicitly (`rt.Close(ctx)`)
+    41	
+    42	Legacy convenience wrappers (`engine.New()`, `engine.NewWithOptions(...)`, `engine.Open(...)`) were removed.
+    43	
+    44	---
+    45	
+    46	## Quick start
+    47	
+    48	```bash
+    49	# from the project root
+    50	cd go-go-goja
+    51	
+    52	# open the canonical prompt (type JS, :quit to exit)
+    53	❯ go run ./cmd/goja-repl tui --log-level debug
+    54	js> const fs = require("fs");
+    55	js> fs.writeFileSync("/tmp/demo.txt", "hi");
+    56	js> console.log(fs.readFileSync("/tmp/demo.txt"));
+    57	hi
+    58	```
+    59	
+    60	The `--log-level debug` flag prints extra logs such as which modules were registered.
+    61	
+    62	Run a JavaScript file directly without creating a persistent session:
+    63	
+    64	```bash
+    65	go run ./cmd/goja-repl run ./testdata/yaml.js
+    66	```
+    67	
+    68	The `run` verb creates a fresh runtime, enables default native modules, derives module roots from the script path, executes the file, and closes the runtime.
+    69	
+    70	### Module Security Flags
+    71	
+    72	You can control which native modules are loaded using persistent CLI flags:
+    73	
+    74	```bash
+    75	# Safe mode: only data-only modules (crypto, events, path, time, timer)
+    76	go run ./cmd/goja-repl --safe-mode run ./script.js
+    77	
+    78	# Whitelist: only specific modules
+    79	go run ./cmd/goja-repl --enable-module fs,path run ./script.js
+    80	
+    81	# Whitelist in the TUI; db is an alias for the database module
+    82	go run ./cmd/goja-repl tui --enable-module db
+    83	
+    84	# Blacklist: all except specific modules
+    85	go run ./cmd/goja-repl --disable-module fs,exec run ./script.js
+    86	```
+    87	
+    88	These flags apply to all commands that build a runtime (`run`, `tui`, `eval`, `create`, etc.).
+    89	
+    90	### Runtime API quick example (current)
+    91	
+    92	```go
+    93	ctx := context.Background()
+    94	
+    95	factory, err := engine.NewBuilder().
+    96	    UseModuleMiddleware(engine.MiddlewareSafe()).
+    97	    Build()
+    98	if err != nil {
+    99	    return err
+   100	}
+   101	
+   102	rt, err := factory.NewRuntime(ctx)
+   103	if err != nil {
+   104	    return err
+   105	}
+
+== database module options and preconfigured DB support (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/modules/database/database.go:17-69) ==
+    17		Exec(query string, args ...any) (sql.Result, error)
+    18	}
+    19	
+    20	type Option func(*DBModule)
+    21	
+    22	func WithName(name string) Option {
+    23		return func(m *DBModule) {
+    24			if m == nil || name == "" {
+    25				return
+    26			}
+    27			m.name = name
+    28		}
+    29	}
+    30	
+    31	func WithPreconfiguredDB(db QueryExecer) Option {
+    32		return func(m *DBModule) {
+    33			if m == nil || db == nil {
+    34				return
+    35			}
+    36			m.queryExecer = db
+    37			m.allowConfigure = false
+    38		}
+    39	}
+    40	
+    41	func WithCloseFn(closeFn func() error) Option {
+    42		return func(m *DBModule) {
+    43			if m == nil {
+    44				return
+    45			}
+    46			m.closeFn = closeFn
+    47		}
+    48	}
+    49	
+    50	func WithConfigureEnabled(enabled bool) Option {
+    51		return func(m *DBModule) {
+    52			if m == nil {
+    53				return
+    54			}
+    55			m.allowConfigure = enabled
+    56		}
+    57	}
+    58	
+    59	// DBModule provides a database connection for a goja runtime.
+    60	type DBModule struct {
+    61		name           string
+    62		queryExecer    QueryExecer
+    63		closeFn        func() error
+    64		allowConfigure bool
+    65	}
+    66	
+    67	var _ modules.NativeModule = (*DBModule)(nil)
+    68	var _ modules.TypeScriptDeclarer = (*DBModule)(nil)
+    69	
+
+== database module JS API and query implementation (/home/manuel/code/wesen/corporate-headquarters/go-go-goja/modules/database/database.go:97-180) ==
+    97					Params: []spec.Param{
+    98						{Name: "driverName", Type: spec.String()},
+    99						{Name: "dataSourceName", Type: spec.String()},
+   100					},
+   101					Returns: spec.Void(),
+   102				},
+   103				{
+   104					Name: "query",
+   105					Params: []spec.Param{
+   106						{Name: "query", Type: spec.String()},
+   107						{Name: "args", Type: spec.Unknown(), Variadic: true},
+   108					},
+   109					Returns: spec.Unknown(),
+   110				},
+   111				{
+   112					Name: "exec",
+   113					Params: []spec.Param{
+   114						{Name: "query", Type: spec.String()},
+   115						{Name: "args", Type: spec.Unknown(), Variadic: true},
+   116					},
+   117					Returns: spec.Unknown(),
+   118				},
+   119				{
+   120					Name:    "close",
+   121					Returns: spec.Void(),
+   122				},
+   123			},
+   124		}
+   125	}
+   126	
+   127	// Doc returns the documentation for the module.
+   128	func (m *DBModule) Doc() string {
+   129		doc := `
+   130	Database module provides a simple SQL interface.
+   131	
+   132	Functions:
+   133	  query(sql, ...args): Executes a query and returns rows.
+   134	    Example: require('database').query('SELECT * FROM users WHERE id = ?', 1);
+   135	  exec(sql, ...args): Executes a statement and returns result summary.
+   136	    Example: require('database').exec('INSERT INTO users (name) VALUES (?)', 'John');
+   137	  close(): Closes the database connection if the module owns it.
+   138	`
+   139		if m.allowConfigure {
+   140			doc += `
+   141	  configure(driverName, dataSourceName): Configures the database connection.
+   142	    Example: require('database').configure('sqlite3', ':memory:');
+   143	`
+   144		} else {
+   145			doc += `
+   146	This module is preconfigured by Go and does not allow configure().
+   147	`
+   148		}
+   149	
+   150		return doc
+   151	}
+   152	
+   153	// Loader exposes the database functions to the JavaScript module.
+   154	func (m *DBModule) Loader(vm *goja.Runtime, moduleObj *goja.Object) {
+   155		exports := moduleObj.Get("exports").(*goja.Object)
+   156		modules.SetExport(exports, m.Name(), "configure", m.Configure)
+   157		modules.SetExport(exports, m.Name(), "query", m.Query)
+   158		modules.SetExport(exports, m.Name(), "exec", m.Exec)
+   159		modules.SetExport(exports, m.Name(), "close", m.Close)
+   160	}
+   161	
+   162	// Configure sets up the database connection.
+   163	func (m *DBModule) Configure(driverName, dataSourceName string) error {
+   164		if !m.allowConfigure {
+   165			return fmt.Errorf("database module %q is preconfigured and does not allow configure()", m.Name())
+   166		}
+   167		if err := m.closeOwnedConnection(); err != nil {
+   168			log.Error().Err(err).Msg("database: failed to close existing connection")
+   169		}
+   170	
+   171		db, err := sql.Open(driverName, dataSourceName)
+   172		if err != nil {
+   173			log.Error().Str("dsn", dataSourceName).Err(err).Msg("database: failed to open connection")
+   174			return err
+   175		}
+   176		m.queryExecer = db
+   177		m.closeFn = db.Close
+   178		log.Debug().Str("driver", driverName).Str("module", m.Name()).Msg("database: configured")
+   179		return nil
+   180	}
+
+== scopedjs public contracts (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/tools/scopedjs/schema.go:1-83) ==
+     1	package scopedjs
+     2	
+     3	import (
+     4		"context"
+     5		"time"
+     6	
+     7		"github.com/dop251/goja_nodejs/require"
+     8		gojengine "github.com/go-go-golems/go-go-goja/engine"
+     9		ggjmodules "github.com/go-go-golems/go-go-goja/modules"
+    10	)
+    11	
+    12	type ToolDescription struct {
+    13		Summary         string
+    14		StarterSnippets []string
+    15		Notes           []string
+    16	}
+    17	
+    18	type ToolDefinitionSpec struct {
+    19		Name        string
+    20		Description ToolDescription
+    21		Tags        []string
+    22		Version     string
+    23	}
+    24	
+    25	type EvalOptions struct {
+    26		Timeout        time.Duration
+    27		MaxOutputChars int
+    28		CaptureConsole bool
+    29	}
+    30	
+    31	type EvalOptionOverrides struct {
+    32		Timeout        *time.Duration
+    33		MaxOutputChars *int
+    34		CaptureConsole *bool
+    35	}
+    36	
+    37	func DefaultEvalOptions() EvalOptions {
+    38		return EvalOptions{
+    39			Timeout:        5 * time.Second,
+    40			MaxOutputChars: 16_000,
+    41			CaptureConsole: true,
+    42		}
+    43	}
+    44	
+    45	type ScopeResolver[Scope any] func(ctx context.Context) (Scope, error)
+    46	
+    47	type EnvironmentSpec[Scope any, Meta any] struct {
+    48		RuntimeLabel string
+    49		Tool         ToolDefinitionSpec
+    50		DefaultEval  EvalOptions
+    51		Describe     func() (EnvironmentManifest, error)
+    52		Configure    func(ctx context.Context, b *Builder, scope Scope) (Meta, error)
+    53	}
+    54	
+    55	type BuildResult[Meta any] struct {
+    56		Runtime  *gojengine.Runtime
+    57		Executor *RuntimeExecutor
+    58		Meta     Meta
+    59		Manifest EnvironmentManifest
+    60		Cleanup  func() error
+    61	}
+    62	
+    63	type EvalInput struct {
+    64		Code  string         `json:"code"`
+    65		Input map[string]any `json:"input,omitempty"`
+    66	}
+    67	
+    68	type ConsoleLine struct {
+    69		Level string `json:"level"`
+    70		Text  string `json:"text"`
+    71	}
+    72	
+    73	type EvalOutput struct {
+    74		Result     any           `json:"result,omitempty"`
+    75		Console    []ConsoleLine `json:"console,omitempty"`
+    76		Error      string        `json:"error,omitempty"`
+    77		DurationMs int64         `json:"durationMs,omitempty"`
+    78	}
+    79	
+    80	type ModuleDoc struct {
+    81		Name        string
+    82		Description string
+    83		Exports     []string
+
+== scopedjs BuildRuntime lifecycle (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/tools/scopedjs/runtime.go:41-82) ==
+    41	}
+    42	
+    43	func (f runtimeInitFunc) InitRuntime(ctx *gojengine.RuntimeContext) error {
+    44		if f.fn == nil {
+    45			return nil
+    46		}
+    47		return f.fn(ctx)
+    48	}
+    49	
+    50	func BuildRuntime[Scope any, Meta any](ctx context.Context, spec EnvironmentSpec[Scope, Meta], scope Scope) (*BuildResult[Meta], error) {
+    51		if spec.Configure == nil {
+    52			return nil, fmt.Errorf("configure callback is required")
+    53		}
+    54		if ctx == nil {
+    55			ctx = context.Background()
+    56		}
+    57	
+    58		builder := &Builder{}
+    59		meta, err := spec.Configure(ctx, builder, scope)
+    60		if err != nil {
+    61			return nil, fmt.Errorf("configure runtime %q: %w", spec.RuntimeLabel, err)
+    62		}
+    63	
+    64		engineBuilder := gojengine.NewBuilder()
+    65		if len(builder.modules) > 0 || len(builder.nativeModules) > 0 {
+    66			engineBuilder = engineBuilder.WithModules(builder.moduleSpecs()...)
+    67		}
+    68		if len(builder.globals) > 0 || len(builder.initializers) > 0 {
+    69			engineBuilder = engineBuilder.WithRuntimeInitializers(builder.runtimeInitializers()...)
+    70		}
+    71	
+    72		factory, err := engineBuilder.Build()
+    73		if err != nil {
+    74			return nil, fmt.Errorf("build runtime factory %q: %w", spec.RuntimeLabel, err)
+    75		}
+    76		rt, err := factory.NewRuntime(ctx)
+    77		if err != nil {
+    78			return nil, fmt.Errorf("create runtime %q: %w", spec.RuntimeLabel, err)
+    79		}
+    80		if err := builder.loadBootstrap(ctx, rt); err != nil {
+    81			_ = rt.Close(context.Background())
+    82			return nil, fmt.Errorf("load bootstrap %q: %w", spec.RuntimeLabel, err)
+
+== scopedjs RunEval contract (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/tools/scopedjs/eval.go:19-55) ==
+    19		promise *goja.Promise
+    20	}
+    21	
+    22	type promiseStateSnapshot struct {
+    23		State  goja.PromiseState
+    24		Result goja.Value
+    25	}
+    26	
+    27	func RunEval(ctx context.Context, rt *gojengine.Runtime, in EvalInput, opts EvalOptions) (EvalOutput, error) {
+    28		if rt == nil || rt.VM == nil || rt.Owner == nil {
+    29			return EvalOutput{}, fmt.Errorf("runtime is nil")
+    30		}
+    31	
+    32		opts = applyEvalDefaults(opts)
+    33		if ctx == nil {
+    34			ctx = context.Background()
+    35		}
+    36		var cancel context.CancelFunc
+    37		if opts.Timeout > 0 {
+    38			if _, ok := ctx.Deadline(); !ok {
+    39				ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+    40				defer cancel()
+    41			}
+    42		}
+    43	
+    44		start := time.Now()
+    45		consoleCapture := newConsoleCapture(opts.MaxOutputChars)
+    46		inputVar := fmt.Sprintf("__scopedjs_input_%d__", evalCounter.Add(1))
+    47	
+    48		if err := prepareEval(ctx, rt, inputVar, in.Input, opts.CaptureConsole, consoleCapture); err != nil {
+    49			return EvalOutput{}, err
+    50		}
+    51		defer func() {
+    52			_ = cleanupEval(context.Background(), rt, inputVar, opts.CaptureConsole, consoleCapture)
+    53		}()
+    54	
+    55		result, execErr := executeEval(ctx, rt, inputVar, in.Code)
+
+== scopedjs RegisterPrebuilt (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/tools/scopedjs/tool.go:11-44) ==
+    11	func RegisterPrebuilt[Scope any, Meta any](reg tools.ToolRegistry, spec EnvironmentSpec[Scope, Meta], handle *BuildResult[Meta], opts EvalOptionOverrides) error {
+    12		if reg == nil {
+    13			return fmt.Errorf("tool registry is nil")
+    14		}
+    15		if handle == nil || handle.Runtime == nil {
+    16			return fmt.Errorf("build result runtime is nil")
+    17		}
+    18		evalOpts := resolveEvalOptions(spec.DefaultEval, opts)
+    19		executor := executorFromBuildResult(handle)
+    20		if executor == nil {
+    21			return fmt.Errorf("build result executor is nil")
+    22		}
+    23		def, err := tools.NewToolFromFunc(
+    24			spec.Tool.Name,
+    25			BuildDescription(spec.Tool.Description, handle.Manifest, "Calls reuse one prebuilt runtime instance, so runtime state can persist across calls."),
+    26			func(ctx context.Context, in EvalInput) (EvalOutput, error) {
+    27				return executor.RunEval(ctx, in, evalOpts)
+    28			},
+    29		)
+    30		if err != nil {
+    31			return fmt.Errorf("create %s tool: %w", spec.Tool.Name, err)
+    32		}
+    33		def.Tags = append([]string(nil), spec.Tool.Tags...)
+    34		def.Version = spec.Tool.Version
+    35		if err := reg.RegisterTool(def.Name, *def); err != nil {
+    36			return fmt.Errorf("register %s tool: %w", spec.Tool.Name, err)
+    37		}
+    38		return nil
+    39	}
+    40	
+    41	func NewLazyRegistrar[Scope any, Meta any](spec EnvironmentSpec[Scope, Meta], resolve ScopeResolver[Scope], opts EvalOptionOverrides) func(reg tools.ToolRegistry) error {
+    42		return func(reg tools.ToolRegistry) error {
+    43			if reg == nil {
+    44				return fmt.Errorf("tool registry is nil")
+
+== Geppetto tool-loop mental model (/home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/doc/topics/07-tools.md:29-116) ==
+    29	Model: tool_call {name: "get_weather", args: {location: "Paris"}}
+    30	  ↓
+    31	Your code: executes get_weather("Paris") → {temp: 18, conditions: "Cloudy"}
+    32	  ↓
+    33	Model: "The weather in Paris is 18°C and cloudy."
+    34	```
+    35	
+    36	## Architecture Overview
+    37	
+    38	In the Turn-based architecture:
+    39	- **Provider engines** emit `tool_call` blocks when models request tools
+    40	- **The tool loop runner** executes tools and appends `tool_use` blocks
+    41	- **Engines re-run** with the updated Turn to let the model continue
+    42	
+    43	> **Key Pattern:** The runtime `tools.ToolRegistry` is carried via `context.Context` (see `tools.WithRegistry`). Only serializable tool configuration lives on `Turn.Data` (e.g., `engine.KeyToolConfig`). This keeps Turn state persistable while allowing dynamic tools per inference call.
+    44	
+    45	### Packages
+    46	
+    47	```go
+    48	import (
+    49	    "github.com/go-go-golems/geppetto/pkg/inference/engine"
+    50	    "github.com/go-go-golems/geppetto/pkg/inference/session"
+    51	    "github.com/go-go-golems/geppetto/pkg/inference/toolloop"
+    52	    "github.com/go-go-golems/geppetto/pkg/inference/toolloop/enginebuilder"
+    53	    "github.com/go-go-golems/geppetto/pkg/inference/tools"
+    54	    "github.com/go-go-golems/geppetto/pkg/turns"
+    55	)
+    56	```
+    57	
+    58	### What you’ll learn
+    59	
+    60	- How to define tools and register them
+    61	- How to attach tools to a `Turn` for provider advertisement
+    62	- How the tool loop runner executes tools
+    63	- How engines map model outputs to Turn blocks
+    64	
+    65	### Key concepts (at a glance)
+    66	
+    67	- Registry: `tools.ToolRegistry` holds callable tools
+    68	- Per-Turn tools:
+    69	  - Runtime registry: carried via `context.Context` using `tools.WithRegistry(ctx, reg)`
+    70	  - Serializable config: stored on `Turn.Data` via `engine.KeyToolConfig`
+    71	- Blocks: `llm_text`, `tool_call`, `tool_use`
+    72	### OpenAI Responses specifics
+    73	
+    74	When using the OpenAI Responses engine (`ai-api-type=openai-responses`):
+    75	
+    76	- Tools are advertised via the `tools` array on the request. For function tools, schema is top-level: `{type: "function", name, description, parameters}`.
+    77	- The engine streams function_call arguments via SSE and emits a `tool-call` event when the function_call completes.
+    78	- Reasoning summary is streamed as `partial-thinking` events; UIs can render it between "Thinking started/ended" markers.
+    79	- The next iteration (not yet implemented in docs) will include the `assistant:function_call` and `tool:tool_result` blocks in the next request’s `input` to continue tool-driven workflows.
+    80	- Payload keys: use `turns.PayloadKeyText`, `turns.PayloadKeyID`, `turns.PayloadKeyName`, `turns.PayloadKeyArgs`, `turns.PayloadKeyResult`, `turns.PayloadKeyError`
+    81	
+    82	---
+    83	
+    84	## Quickstart: From zero to tool execution
+    85	
+    86	1) Define a tool function and register it
+    87	
+    88	```go
+    89	type WeatherRequest struct {
+    90	    Location string `json:"location" jsonschema:"required"`
+    91	    Units    string `json:"units,omitempty" jsonschema:"enum=celsius,enum=fahrenheit,default=celsius"`
+    92	}
+    93	
+    94	type WeatherResponse struct {
+    95	    Location    string
+    96	    Temperature float64
+    97	}
+    98	
+    99	func weatherTool(req WeatherRequest) WeatherResponse {
+   100	    return WeatherResponse{Location: req.Location, Temperature: 22}
+   101	}
+   102	
+   103	reg := tools.NewInMemoryToolRegistry()
+   104	def, _ := tools.NewToolFromFunc("get_weather", "Get weather", weatherTool)
+   105	_ = reg.RegisterTool("get_weather", *def)
+   106	```
+   107	
+   108	2) Run the tool loop (the loop attaches the registry to context and manages tool config on the Turn)
+   109	
+   110	```go
+   111	seed := &turns.Turn{}
+   112	turns.AppendBlock(seed, turns.NewUserTextBlock("What's the weather in Paris? Use get_weather."))
+   113	
+   114	loopCfg := toolloop.NewLoopConfig().
+   115	    WithMaxIterations(5)
+   116	
+
+== Geppetto runner profile-flag example (/home/manuel/code/wesen/corporate-headquarters/geppetto/cmd/examples/runner-glazed-registry-flags/main.go:37-92) ==
+    37	var _ cmds.WriterCommand = (*registryFlagsCommand)(nil)
+    38	
+    39	type registryFlagsSettings struct {
+    40		Prompt string `glazed:"prompt"`
+    41	}
+    42	
+    43	func newRegistryFlagsCommand() (*registryFlagsCommand, error) {
+    44		profileSettingsSection, err := geppettosections.NewProfileSettingsSection(
+    45			geppettosections.WithProfileDefault("openai-fast"),
+    46			geppettosections.WithProfileRegistriesDefault(runnerexample.ExampleEngineProfileRegistryPath()),
+    47		)
+    48		if err != nil {
+    49			return nil, errors.Wrap(err, "create profile settings section")
+    50		}
+    51	
+    52		description := cmds.NewCommandDescription(
+    53			"run",
+    54			cmds.WithShort("Run inference via pkg/inference/runner with only registry selection exposed through Glazed"),
+    55			cmds.WithArguments(
+    56				fields.New("prompt", fields.TypeString, fields.WithHelp("Prompt to run"), fields.WithRequired(true)),
+    57			),
+    58			cmds.WithSections(profileSettingsSection),
+    59		)
+    60	
+    61		return &registryFlagsCommand{CommandDescription: description}, nil
+    62	}
+    63	
+    64	func (c *registryFlagsCommand) RunIntoWriter(ctx context.Context, parsedValues *values.Values, w io.Writer) error {
+    65		s := &registryFlagsSettings{}
+    66		if err := parsedValues.DecodeSectionInto(values.DefaultSlug, s); err != nil {
+    67			return err
+    68		}
+    69		profileSettings := &geppettosections.ProfileSettings{}
+    70		if err := parsedValues.DecodeSectionInto(geppettosections.ProfileSettingsSectionSlug, profileSettings); err != nil {
+    71			return err
+    72		}
+    73	
+    74		stepSettings, closeRegistry, err := runnerexample.ResolveInferenceSettingsFromRegistry(ctx, profileSettings.ProfileRegistries, profileSettings.Profile)
+    75		if err != nil {
+    76			return err
+    77		}
+    78		defer func() {
+    79			if closeRegistry != nil {
+    80				_ = closeRegistry()
+    81			}
+    82		}()
+    83	
+    84		r := runner.New()
+    85		_, out, err := r.Run(ctx, runner.StartRequest{
+    86			Prompt: s.Prompt,
+    87			Runtime: runner.Runtime{
+    88				InferenceSettings: stepSettings,
+    89			},
+    90		})
+    91		if err != nil {
+    92			return err
+
+== Pinocchio simple chat profile resolution (/home/manuel/code/wesen/corporate-headquarters/pinocchio/cmd/examples/simple-chat/main.go:80-143) ==
+    80		profileSettingsSection, err := profilebootstrap.NewProfileSettingsSection()
+    81		if err != nil {
+    82			return nil, err
+    83		}
+    84		return &TestCommand{
+    85			CommandDescription: cmds.NewCommandDescription("chat",
+    86				cmds.WithShort("Run chat with simple streaming printer"),
+    87				cmds.WithFlags(
+    88					fields.New("debug",
+    89						fields.TypeBool,
+    90						fields.WithHelp("Debug mode"),
+    91						fields.WithDefault(false),
+    92					),
+    93					fields.New("server-tools",
+    94						fields.TypeBool,
+    95						fields.WithHelp("Enable Responses server-side tools (web_search)"),
+    96						fields.WithDefault(false),
+    97					),
+    98				),
+    99				cmds.WithSections(profileSettingsSection),
+   100			),
+   101			pinocchioCmd: cmd,
+   102		}, nil
+   103	}
+   104	
+   105	func (c *TestCommand) RunIntoWriter(ctx context.Context, parsedLayers *values.Values, w io.Writer) error {
+   106		s := &ChatCommandSettings{}
+   107		err := parsedLayers.DecodeSectionInto(values.DefaultSlug, s)
+   108		if err != nil {
+   109			return errors.Wrap(err, "failed to initialize settings")
+   110		}
+   111	
+   112		resolvedLayers, err := resolveCommandLayers(c.pinocchioCmd, parsedLayers)
+   113		if err != nil {
+   114			return err
+   115		}
+   116	
+   117		if s.Debug {
+   118			b_, err := yaml.Marshal(resolvedLayers)
+   119			if err != nil {
+   120				return err
+   121			}
+   122			fmt.Println(string(b_))
+   123			return nil
+   124		}
+   125	
+   126		helpersSettings := &cmdlayers.HelpersSettings{}
+   127		err = resolvedLayers.DecodeSectionInto(cmdlayers.GeppettoHelpersSlug, helpersSettings)
+   128		if err != nil {
+   129			return errors.Wrap(err, "failed to initialize helpers settings")
+   130		}
+   131	
+   132		resolvedSettings, err := profilebootstrap.ResolveCLIEngineSettings(ctx, parsedLayers)
+   133		if err != nil {
+   134			return errors.Wrap(err, "failed to resolve inference settings")
+   135		}
+   136		if resolvedSettings.Close != nil {
+   137			defer resolvedSettings.Close()
+   138		}
+   139		stepSettings := resolvedSettings.FinalInferenceSettings
+   140		if stepSettings == nil {
+   141			return errors.New("resolved inference settings are nil")
+   142		}
+   143	
+
+== Pinocchio bootstrap config and wrappers (/home/manuel/code/wesen/corporate-headquarters/pinocchio/pkg/cmds/profilebootstrap/profile_selection.go:36-72) ==
+    36		Documents       *configdoc.ResolvedDocuments
+    37		Effective       *configdoc.Document
+    38		ProfileSettings ProfileSettings
+    39	}
+    40	
+    41	func pinocchioBootstrapConfig() bootstrap.AppBootstrapConfig {
+    42		return bootstrap.AppBootstrapConfig{
+    43			AppName:          "pinocchio",
+    44			EnvPrefix:        "PINOCCHIO",
+    45			ConfigFileMapper: configFileMapper,
+    46			NewProfileSection: func() (schema.Section, error) {
+    47				return geppettosections.NewProfileSettingsSection()
+    48			},
+    49			BuildBaseSections: func() ([]schema.Section, error) {
+    50				return geppettosections.CreateGeppettoSections()
+    51			},
+    52			ConfigPlanBuilder: pinocchioConfigPlanBuilder,
+    53		}
+    54	}
+    55	
+    56	func BootstrapConfig() bootstrap.AppBootstrapConfig {
+    57		return pinocchioBootstrapConfig()
+    58	}
+    59	
+    60	func NewProfileSettingsSection() (schema.Section, error) {
+    61		return bootstrap.NewProfileSettingsSection(pinocchioBootstrapConfig())
+    62	}
+    63	
+    64	func NewCLISelectionValues(input CLISelectionInput) (*values.Values, error) {
+    65		return bootstrap.NewCLISelectionValues(pinocchioBootstrapConfig(), input)
+    66	}
+    67	
+    68	func ResolveCLIConfigFilesResolved(parsed *values.Values) (*ResolvedCLIConfigFiles, error) {
+    69		return bootstrap.ResolveCLIConfigFilesResolved(pinocchioBootstrapConfig(), parsed)
+    70	}
+    71	
+    72	func ResolveCLIProfileRuntime(ctx context.Context, parsed *values.Values) (*ResolvedCLIProfileRuntime, error) {
+
+== Glazed help export docs (/home/manuel/code/wesen/corporate-headquarters/glazed/pkg/doc/topics/28-export-help-entries.md:1-122) ==
+     1	---
+     2	Title: Export Help Entries
+     3	Slug: export-help-entries
+     4	Short: Use `glaze help export` to export help section metadata and content to JSON, CSV, files, or SQLite for backup, indexing, and external tooling.
+     5	Topics:
+     6	- help
+     7	- export
+     8	- cli
+     9	- sqlite
+    10	- json
+    11	- documentation
+    12	Commands:
+    13	- help
+    14	- export
+    15	Flags:
+    16	- with-content
+    17	- format
+    18	- output-path
+    19	- flatten-dirs
+    20	- type
+    21	- topic
+    22	- command
+    23	- flag
+    24	- slug
+    25	IsTopLevel: true
+    26	IsTemplate: false
+    27	ShowPerDefault: true
+    28	SectionType: GeneralTopic
+    29	---
+    30	
+    31	## Why `glaze help export` exists
+    32	
+    33	The Glazed help system stores documentation in an SQLite-backed store at runtime. That makes querying fast, but it also means the data is trapped inside a running process. `glaze help export` solves this by letting you dump the entire help tree—or a filtered slice of it—to formats you can use elsewhere.
+    34	
+    35	This matters when you want to:
+    36	
+    37	- back up or version-control your help content as plain files,
+    38	- feed help metadata into an external search index or CMS,
+    39	- generate reports on documentation coverage (which commands have examples, which topics are missing),
+    40	- or ship a SQLite database of your app's documentation alongside the binary.
+    41	
+    42	The command is built on the same `HelpSystem` and `Store` primitives that `glaze serve` and `glaze render-site` use, so the exported data is always consistent with what the CLI and the web browser show.
+    43	
+    44	## Basic usage
+    45	
+    46	The simplest invocation exports every loaded section as JSON:
+    47	
+    48	```bash
+    49	glaze help export --output json
+    50	```
+    51	
+    52	By default, `--with-content` is `true`, so the JSON includes the full markdown body of each section. If you only need metadata, disable content:
+    53	
+    54	```bash
+    55	glaze help export --with-content=false --output csv
+    56	```
+    57	
+    58	## Export formats
+    59	
+    60	The `--format` flag controls the export target:
+    61	
+    62	| Format | What it produces | Best for |
+    63	|--------|-----------------|----------|
+    64	| `glazed` (default) | Tabular output via the GlazeProcessor | JSON, CSV, YAML, or table dumps to stdout |
+    65	| `files` | One `.md` file per section on disk | Backup, version control, or editing |
+    66	| `sqlite` | A standalone SQLite database | Querying with SQL, shipping with apps |
+    67	
+    68	### Tabular export (`--format glazed`)
+    69	
+    70	This is the default. It behaves like any other Glazed command: you can choose the output serializer with `--output`.
+    71	
+    72	```bash
+    73	# Pretty-printed JSON with full content
+    74	glaze help export --output json
+    75	
+    76	# Compact CSV for spreadsheet import
+    77	glaze help export --with-content=false --output csv
+    78	
+    79	# YAML for human review
+    80	glaze help export --output yaml
+    81	```
+    82	
+    83	The tabular mode emits one row per section with these columns:
+    84	
+    85	| Column | Description |
+    86	|--------|-------------|
+    87	| `slug` | Unique section identifier |
+    88	| `title` | Display title |
+    89	| `short` | One-line description |
+    90	| `content` | Full markdown body (omitted when `--with-content=false`) |
+    91	| `section_type` | `GeneralTopic`, `Example`, `Application`, or `Tutorial` |
+    92	| `topics` | Comma-separated topic tags |
+    93	| `commands` | Comma-linked command associations |
+    94	| `flags` | Comma-linked flag associations |
+    95	| `is_top_level` | Whether the section appears in top-level listings |
+    96	| `show_per_default` | Whether the section is shown without `--all` |
+    97	| `order` | Sort order within its type group |
+    98	
+    99	### File export (`--format files`)
+   100	
+   101	File mode writes each section to a separate `.md` file, reconstructing the original frontmatter so the files can be re-loaded into Glazed later.
+   102	
+   103	```bash
+   104	# Default: typed subdirectories
+   105	glaze help export --format files --output-path ./exported-help
+   106	```
+   107	
+   108	This produces a directory tree like:
+   109	
+   110	```
+   111	exported-help/
+   112	  general-topic/
+   113	    help-system.md
+   114	    sections-guide.md
+   115	  example/
+   116	    json-output.md
+   117	  application/
+   118	    real-world-pipeline.md
+   119	  tutorial/
+   120	    getting-started.md
+   121	```
+   122	
+
+== Glazed help system and section shape (/home/manuel/code/wesen/corporate-headquarters/glazed/pkg/doc/topics/01-help-system.md:20-92) ==
+    20	- applications
+    21	- tutorials
+    22	- help
+    23	IsTemplate: false
+    24	IsTopLevel: true
+    25	ShowPerDefault: true
+    26	SectionType: GeneralTopic
+    27	---
+    28	
+    29	# Help System
+    30	
+    31	## Overview
+    32	
+    33	The Glazed help system provides a structured, queryable approach to CLI documentation that goes beyond basic command help. It organizes documentation into typed sections (topics, examples, applications, tutorials) with rich metadata for filtering and discovery. The system supports both human-readable help pages and programmatic querying through a simple DSL, making it easy to build comprehensive CLI documentation that users can explore efficiently.
+    34	
+    35	The help system stores sections in an SQLite-backed store, enabling fast queries, text search, and metadata filtering. You typically load documentation from markdown files with YAML frontmatter at startup, creating a self-contained help database that you can query from both the command line and Go code.
+    36	
+    37	You can also export the entire help tree—or a filtered slice of it—to JSON, CSV, YAML, individual markdown files, or a standalone SQLite database. This is useful for backups, external indexing, and shipping documentation alongside your application. See [`glaze help export-help-entries`](glaze help export-help-entries) for details.
+    38	
+    39	## Section Types and Structure
+    40	
+    41	Help sections follow a type-based classification system that separates conceptual documentation from practical examples. This separation enables precise filtering and contextual help display, allowing users to find exactly the type of information they need based on their current task.
+    42	
+    43	### Section Types
+    44	
+    45	- **GeneralTopic**: Conceptual documentation explaining how features work
+    46	- **Example**: Focused demonstrations of specific command usage
+    47	- **Application**: Real-world use cases combining multiple features
+    48	- **Tutorial**: Step-by-step guides for complex workflows
+    49	
+    50	### Section Structure
+    51	
+    52	Each section contains:
+    53	
+    54	```go
+    55	type Section struct {
+    56	    // Core content
+    57	    Slug     string      // Unique identifier for referencing
+    58	    Title    string      // Display title
+    59	    Short    string      // Brief description
+    60	    Content  string      // Full markdown content
+    61	    
+    62	    // Section classification
+    63	    SectionType SectionType // GeneralTopic, Example, etc.
+    64	    
+    65	    // Searchable metadata
+    66	    Topics   []string    // Related topic tags
+    67	    Commands []string    // Relevant CLI commands
+    68	    Flags    []string    // Associated command flags
+    69	    
+    70	    // Display behavior
+    71	    IsTopLevel     bool // Show in main help listing
+    72	    ShowPerDefault bool // Include without --all flag
+    73	    Order          int  // Sort order within type
+    74	}
+    75	```
+    76	
+    77	## Programmatic Usage
+    78	
+    79	The help system exposes a programming model centered around the `HelpSystem` struct, which manages an SQLite-backed documentation store. You can initialize the system, load documentation from various sources, and query sections using both simple lookups and complex DSL expressions.
+    80	
+    81	### Initializing the Help System
+    82	
+    83	```go
+    84	// Create new help system with in-memory storage
+    85	hs := help.NewHelpSystem()
+    86	
+    87	// Load documentation from embedded filesystem
+    88	//go:embed docs
+    89	var docsFS embed.FS
+    90	err := hs.LoadSectionsFromFS(docsFS, "docs")
+    91	if err != nil {
+    92	    log.Fatal(err)
