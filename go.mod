@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/go-go-golems/geppetto v0.11.14
 	github.com/go-go-golems/glazed v1.2.5
-	github.com/go-go-golems/go-go-goja v0.4.10
+	github.com/go-go-golems/go-go-goja v0.4.15
 	github.com/go-go-golems/pinocchio v0.10.16
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/rs/zerolog v1.35.0
@@ -147,5 +147,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/go-go-golems/go-go-goja => /home/manuel/code/wesen/corporate-headquarters/go-go-goja

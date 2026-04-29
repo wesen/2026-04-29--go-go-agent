@@ -112,6 +112,8 @@ github.com/go-go-golems/geppetto v0.11.14 h1:xdgljfOLWq4TdKnV8VYxzT5CVG7M9RsKWTl
 github.com/go-go-golems/geppetto v0.11.14/go.mod h1:IOLs96DYoREFGdjwQJVxDnHxmqvP/h8gF75ozixF6SE=
 github.com/go-go-golems/glazed v1.2.5 h1:URTJ6oxzjRAXLmuo7SrR8K/ZOrpGPIKVz9oW6mCvMSM=
 github.com/go-go-golems/glazed v1.2.5/go.mod h1:1oF2sFLSCHFJBGx7xQ/pIXI+9WLZhonD4U8X46AqQrM=
+github.com/go-go-golems/go-go-goja v0.4.15 h1:0PNFBk4yRpfvi3o/cP5ciduyJGB3b52EINGTpBcgOYg=
+github.com/go-go-golems/go-go-goja v0.4.15/go.mod h1:mnEFH70HM3+JROMsBSBNTV8REF0K4YSYes6d0NS900o=
 github.com/go-go-golems/pinocchio v0.10.16 h1:dIfl7Urldr0dnhaRKMg1vJBWfSIDizj7d/yt0xiFWGQ=
 github.com/go-go-golems/pinocchio v0.10.16/go.mod h1:veMegkSPvTIy/H8/DXSLxgep/T51vK8cL2iSJbQUFf0=
 github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
