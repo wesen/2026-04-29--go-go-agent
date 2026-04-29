@@ -46,3 +46,12 @@ Implemented the chat prototype with embedded help entries, inputDB/outputDB Java
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/evaljs/runtime.go — eval_js runtime/tool implementation
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdb/helpdb.go — embedded help DB materialization
 
+
+## 2026-04-29
+
+Uploaded the refreshed implementation bundle to reMarkable at /ai/2026/04/29/LLM-EVAL-JS-CHATBOT.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/reference/01-investigation-diary.md — Records implementation bundle upload evidence
+

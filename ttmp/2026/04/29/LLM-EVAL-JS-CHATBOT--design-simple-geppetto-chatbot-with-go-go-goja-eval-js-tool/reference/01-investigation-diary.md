@@ -655,3 +655,85 @@ Commit hash:
 ```text
 15de510d11b6509846604d6801e5e1f89afa4b69
 ```
+
+## Step 7: Uploaded the implementation bundle to reMarkable
+
+After committing the code and diary updates, I uploaded a refreshed ticket bundle to reMarkable so the implementation state is available alongside the earlier design bundles.
+
+This upload includes the updated task list, changelog, design-doc file relationships, and diary entry that references the prototype commit.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 5)
+
+**Assistant interpretation:** Preserve the implementation outcome in the ticket deliverables and keep reMarkable in sync after the prototype landed.
+
+**Inferred user intent:** Maintain a readable external copy of the evolving ticket documentation.
+
+**Commit (code):** `d79e8a65ed28cc614d85be14313357cf0be04bb0` — "Diary: record chat prototype implementation"
+
+### What I did
+
+- Ran a dry-run reMarkable bundle upload.
+- Uploaded the implementation bundle to:
+  ```text
+  /ai/2026/04/29/LLM-EVAL-JS-CHATBOT
+  ```
+- Verified the remote listing includes:
+  ```text
+  LLM-EVAL-JS-CHATBOT implementation bundle
+  ```
+
+### Why
+
+- The implementation changed the ticket docs after the earlier design-only upload.
+- A refreshed bundle makes the reMarkable copy match the implementation state.
+
+### What worked
+
+- Dry-run succeeded.
+- Real upload succeeded.
+- Remote listing showed the previous design bundles plus the new implementation bundle.
+
+### What didn't work
+
+- Nothing failed in this step.
+
+### What I learned
+
+- Keeping the implementation bundle under a new name avoids overwriting the earlier design-only PDFs.
+
+### What was tricky to build
+
+- N/A; this was a straightforward upload step.
+
+### What warrants a second pair of eyes
+
+- Check the PDF visually on reMarkable if formatting quality matters.
+
+### What should be done in the future
+
+- Upload a new bundle after any further implementation diary updates.
+
+### Code review instructions
+
+- Prefer the latest `LLM-EVAL-JS-CHATBOT implementation bundle` when reading on reMarkable.
+
+### Technical details
+
+Commands run:
+
+```bash
+remarquee upload bundle --dry-run \
+  "$TDIR/index.md" \
+  "$TDIR/design-doc/01-geppetto-eval-js-chatbot-design-and-implementation-guide.md" \
+  "$TDIR/reference/01-investigation-diary.md" \
+  "$TDIR/tasks.md" \
+  "$TDIR/changelog.md" \
+  --name "LLM-EVAL-JS-CHATBOT implementation bundle" \
+  --remote-dir "/ai/2026/04/29/LLM-EVAL-JS-CHATBOT" \
+  --toc-depth 2
+
+remarquee upload bundle ...
+remarquee cloud ls /ai/2026/04/29/LLM-EVAL-JS-CHATBOT --long --non-interactive
+```
