@@ -1,0 +1,181 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+
+	"github.com/go-go-golems/geppetto/pkg/events"
+)
+
+type stdoutStreamOptions struct {
+	ShowToolArgs    bool
+	ShowToolResults bool
+	MaxPreviewChars int
+}
+
+type stdoutStreamSink struct {
+	mu sync.Mutex
+
+	out    io.Writer
+	errOut io.Writer
+	opts   stdoutStreamOptions
+
+	assistantStarted bool
+	lastWasDelta     bool
+}
+
+func newStdoutStreamSink(out io.Writer, errOut io.Writer, opts stdoutStreamOptions) *stdoutStreamSink {
+	if out == nil {
+		out = io.Discard
+	}
+	if errOut == nil {
+		errOut = out
+	}
+	if opts.MaxPreviewChars <= 0 {
+		opts.MaxPreviewChars = 500
+	}
+	return &stdoutStreamSink{out: out, errOut: errOut, opts: opts}
+}
+
+func (s *stdoutStreamSink) PublishEvent(event events.Event) error {
+	if s == nil || event == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch e := event.(type) {
+	case *events.EventPartialCompletion:
+		return s.writeDelta(e.Delta)
+	case *events.EventToolCall:
+		return s.writeToolCall(e.ToolCall)
+	case *events.EventToolCallExecute:
+		return s.writeToolExecute(e.ToolCall)
+	case *events.EventToolCallExecutionResult:
+		return s.writeToolExecutionResult(e.ToolResult)
+	case *events.EventToolResult:
+		return s.writeToolResult(e.ToolResult)
+	case *events.EventError:
+		return s.writeError(e.ErrorString)
+	default:
+		return nil
+	}
+}
+
+func (s *stdoutStreamSink) writeDelta(delta string) error {
+	if delta == "" {
+		return nil
+	}
+	if !s.assistantStarted {
+		if _, err := fmt.Fprint(s.out, "\nassistant: "); err != nil {
+			return err
+		}
+		s.assistantStarted = true
+	}
+	_, err := fmt.Fprint(s.out, delta)
+	s.lastWasDelta = true
+	return err
+}
+
+func (s *stdoutStreamSink) writeToolCall(tc events.ToolCall) error {
+	if err := s.ensureLineBreak(); err != nil {
+		return err
+	}
+	name := defaultString(tc.Name, "tool")
+	id := defaultString(tc.ID, "unknown")
+	if _, err := fmt.Fprintf(s.out, "\n[tool %s call %s]\n", name, id); err != nil {
+		return err
+	}
+	if s.opts.ShowToolArgs && strings.TrimSpace(tc.Input) != "" {
+		if _, err := fmt.Fprintf(s.out, "args: %s\n", truncateOneLine(tc.Input, s.opts.MaxPreviewChars)); err != nil {
+			return err
+		}
+	}
+	s.lastWasDelta = false
+	return nil
+}
+
+func (s *stdoutStreamSink) writeToolExecute(tc events.ToolCall) error {
+	if err := s.ensureLineBreak(); err != nil {
+		return err
+	}
+	name := defaultString(tc.Name, "tool")
+	id := defaultString(tc.ID, "unknown")
+	_, err := fmt.Fprintf(s.out, "[tool %s running %s]\n", name, id)
+	s.lastWasDelta = false
+	return err
+}
+
+func (s *stdoutStreamSink) writeToolExecutionResult(tr events.ToolResult) error {
+	if err := s.ensureLineBreak(); err != nil {
+		return err
+	}
+	name := defaultString(tr.Name, "tool")
+	id := defaultString(tr.ID, "unknown")
+	if _, err := fmt.Fprintf(s.out, "[tool %s done %s]\n", name, id); err != nil {
+		return err
+	}
+	if s.opts.ShowToolResults && strings.TrimSpace(tr.Result) != "" {
+		if _, err := fmt.Fprintf(s.out, "result: %s\n", truncateOneLine(tr.Result, s.opts.MaxPreviewChars)); err != nil {
+			return err
+		}
+	}
+	s.lastWasDelta = false
+	return nil
+}
+
+func (s *stdoutStreamSink) writeToolResult(tr events.ToolResult) error {
+	if err := s.ensureLineBreak(); err != nil {
+		return err
+	}
+	name := defaultString(tr.Name, "tool")
+	id := defaultString(tr.ID, "unknown")
+	if _, err := fmt.Fprintf(s.out, "[tool %s result %s]\n", name, id); err != nil {
+		return err
+	}
+	if s.opts.ShowToolResults && strings.TrimSpace(tr.Result) != "" {
+		if _, err := fmt.Fprintf(s.out, "result: %s\n", truncateOneLine(tr.Result, s.opts.MaxPreviewChars)); err != nil {
+			return err
+		}
+	}
+	s.lastWasDelta = false
+	return nil
+}
+
+func (s *stdoutStreamSink) writeError(message string) error {
+	if err := s.ensureLineBreak(); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(s.errOut, "\n[error] %s\n", message)
+	s.lastWasDelta = false
+	return err
+}
+
+func (s *stdoutStreamSink) ensureLineBreak() error {
+	if s.lastWasDelta {
+		_, err := fmt.Fprintln(s.out)
+		s.lastWasDelta = false
+		return err
+	}
+	return nil
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
+}
+
+func truncateOneLine(value string, max int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return value[:max-1] + "…"
+}

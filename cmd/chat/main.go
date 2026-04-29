@@ -35,6 +35,8 @@ type settings struct {
 	NoLogDB            bool
 	LogDBKeepTemp      bool
 	LogDBTurnSnapshots bool
+	StreamStdout       bool
+	PrintFinalTurn     bool
 }
 
 func main() {
@@ -67,6 +69,8 @@ runtime, and registers a single Geppetto tool named eval_js.`,
 	cmd.Flags().BoolVar(&s.NoLogDB, "no-log-db", false, "Disable private DB logging and eval_js persistence")
 	cmd.Flags().BoolVar(&s.LogDBKeepTemp, "log-db-keep-temp", false, "Keep the default temporary log DB after exit")
 	cmd.Flags().BoolVar(&s.LogDBTurnSnapshots, "log-db-turn-snapshots", false, "Persist intermediate turn snapshots in addition to final turns")
+	cmd.Flags().BoolVar(&s.StreamStdout, "stream", true, "Stream assistant/tool progress to stdout while inference runs")
+	cmd.Flags().BoolVar(&s.PrintFinalTurn, "print-final-turn", false, "Print the full final turn after completion, even when streaming")
 
 	if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -167,12 +171,12 @@ func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Wr
 	seed := initialTurn()
 	if len(args) > 0 {
 		prompt := strings.Join(args, " ")
-		return runPrompt(ctx, r, runtime, logDB, s.LogDBTurnSnapshots, &seed, prompt, out)
+		return runPrompt(ctx, r, runtime, logDB, s.LogDBTurnSnapshots, s.StreamStdout, s.PrintFinalTurn, &seed, prompt, out, errOut)
 	}
-	return repl(ctx, r, runtime, logDB, s.LogDBTurnSnapshots, &seed, in, out, errOut)
+	return repl(ctx, r, runtime, logDB, s.LogDBTurnSnapshots, s.StreamStdout, s.PrintFinalTurn, &seed, in, out, errOut)
 }
 
-func repl(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *logdb.DB, logDBTurnSnapshots bool, seed *turns.Turn, in io.Reader, out io.Writer, errOut io.Writer) error {
+func repl(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *logdb.DB, logDBTurnSnapshots bool, streamStdout bool, printFinalTurn bool, seed *turns.Turn, in io.Reader, out io.Writer, errOut io.Writer) error {
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	fmt.Fprintln(out, "chat REPL. Type :help for commands, :quit to exit.")
@@ -195,17 +199,20 @@ func repl(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *
 			printREPLHelp(out)
 			continue
 		}
-		if err := runPrompt(ctx, r, runtime, logDB, logDBTurnSnapshots, seed, line, out); err != nil {
+		if err := runPrompt(ctx, r, runtime, logDB, logDBTurnSnapshots, streamStdout, printFinalTurn, seed, line, out, errOut); err != nil {
 			fmt.Fprintf(errOut, "error: %v\n", err)
 		}
 	}
 }
 
-func runPrompt(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *logdb.DB, logDBTurnSnapshots bool, seed *turns.Turn, prompt string, out io.Writer) error {
+func runPrompt(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *logdb.DB, logDBTurnSnapshots bool, streamStdout bool, printFinalTurn bool, seed *turns.Turn, prompt string, out io.Writer, errOut io.Writer) error {
 	req := runner.StartRequest{
 		SeedTurn: seed,
 		Prompt:   prompt,
 		Runtime:  runtime,
+	}
+	if streamStdout {
+		req.EventSinks = append(req.EventSinks, newStdoutStreamSink(out, errOut, stdoutStreamOptions{}))
 	}
 	if logDB != nil {
 		req.SessionID = logDB.ChatSessionID
@@ -218,9 +225,14 @@ func runPrompt(ctx context.Context, r *runner.Runner, runtime runner.Runtime, lo
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(out)
-	turns.FprintfTurn(out, updated, turns.WithToolDetail(true))
-	fmt.Fprintln(out)
+	if streamStdout {
+		fmt.Fprintln(out)
+	}
+	if !streamStdout || printFinalTurn {
+		fmt.Fprintln(out)
+		turns.FprintfTurn(out, updated, turns.WithToolDetail(true))
+		fmt.Fprintln(out)
+	}
 	*seed = *updated.Clone()
 	return nil
 }
