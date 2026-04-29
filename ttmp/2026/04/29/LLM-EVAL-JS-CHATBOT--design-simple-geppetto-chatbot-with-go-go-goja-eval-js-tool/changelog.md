@@ -65,3 +65,12 @@ Wired chat root logging/help like a Glazed command, changed REPL output to show 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — Glazed root setup and detailed turn printing
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/sources/tmux-gpt5-nano-low-smoke-with-args.txt — Live tmux validation output
 
+
+## 2026-04-29
+
+Copied the Obsidian chat-agent deep-dive article into the ticket as reference/02 for postprocessing and publication.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/LLM-EVAL-JS-CHATBOT--design-simple-geppetto-chatbot-with-go-go-goja-eval-js-tool/reference/02-article-building-a-tool-using-go-chat-agent.md — Ticket-local article copy
+
