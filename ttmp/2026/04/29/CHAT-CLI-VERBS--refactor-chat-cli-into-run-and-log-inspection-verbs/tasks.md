@@ -9,3 +9,4 @@
 - [x] Add log DB inspection verbs for sessions, eval calls, repl evaluations, bindings, turns, blocks, and schema
 - [x] Add tests for run compatibility and inspect verb output
 - [x] Run validation and record implementation diary
+- [x] Convert run and inspect verbs to Glazed command implementations

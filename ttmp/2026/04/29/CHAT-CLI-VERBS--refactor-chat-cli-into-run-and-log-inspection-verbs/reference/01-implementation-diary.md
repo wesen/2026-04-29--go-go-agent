@@ -165,3 +165,35 @@ Files changed:
 - `cmd/chat/inspect_test.go`
 - `go.mod`
 - `go.sum`
+
+## Step 7: Convert run and inspect verbs to Glazed commands
+
+The user clarified that the verb implementation should be "full Glazed" rather than hand-written Cobra subcommands. I kept the Cobra root only as the application shell required by Glazed's Cobra integration and converted the behavioral verbs to Glazed command objects.
+
+### What changed
+
+- Added `cmd/chat/run_command.go` with `RunCommand` implementing `cmds.WriterCommand`.
+- `run` is now described by `cmds.NewCommandDescription`, `fields.New`, `cmds.WithFlags`, and `cmds.WithArguments`.
+- Reworked `cmd/chat/inspect.go` so every inspect leaf command is an `InspectQueryCommand` implementing `cmds.GlazeCommand`.
+- Inspect commands are registered through `cli.AddCommandsToRootCommand` with `cmds.WithParents("inspect")`.
+- Inspect output now uses Glazed processors, so `--output json`, table output, and Glazed output flags work naturally.
+- Removed the hand-written `--json` flag because Glazed output formats replace it (`--output json`).
+- Added `cli.CobraParserConfig{SkipCommandSettingsSection: true}` to avoid a conflict between Glazed's built-in `--config-file` command-settings flag and the chat run command's Pinocchio `--config-file` flag.
+
+### Commands validated
+
+```bash
+go test ./cmd/chat -count=1 -v
+go test ./... -count=1
+go run ./cmd/chat --help
+go run ./cmd/chat run --help
+go run ./cmd/chat inspect schema --log-db /tmp/chat-replcell.sqlite --output json
+```
+
+### Important observation
+
+Glazed command integration still uses Cobra under the hood for CLI parsing and root command composition. The important distinction is that the verbs themselves are now Glazed commands, not manually wired Cobra flag handlers.
+
+### Commit
+
+- `cb4b01e` — `Convert chat verbs to Glazed commands`
