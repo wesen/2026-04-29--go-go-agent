@@ -40,3 +40,13 @@ Committed implementation: go-go-goja exact ResultJSON support in 848db80 and go-
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-EVALJS-REPL-CELL--switch-eval-js-to-persistent-repl-cell-semantics/sources/live-repl-cell-eval-js-smoke-2026-04-29.txt — Live smoke output and DB counts
 
+
+## 2026-04-29
+
+Improved non-JSON final expression handling: go-go-goja now emits kind/preview metadata for function, undefined, and unknown results (commit e9353df), and go-go-agent surfaces that metadata through eval_js results (commit 31466ce).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go — Surface kind/preview metadata in EvalOutput.Result
+- /home/manuel/code/wesen/corporate-headquarters/go-go-goja/pkg/replsession/evaluate.go — Non-JSON result metadata envelopes
+
