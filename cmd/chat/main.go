@@ -11,6 +11,9 @@ import (
 
 	"github.com/go-go-golems/geppetto/pkg/inference/runner"
 	"github.com/go-go-golems/geppetto/pkg/turns"
+	"github.com/go-go-golems/glazed/pkg/cmds/logging"
+	"github.com/go-go-golems/glazed/pkg/help"
+	help_cmd "github.com/go-go-golems/glazed/pkg/help/cmd"
 	"github.com/go-go-golems/go-go-agent/internal/evaljs"
 	"github.com/go-go-golems/go-go-agent/internal/helpdb"
 	"github.com/go-go-golems/go-go-agent/internal/helpdocs"
@@ -39,6 +42,9 @@ func main() {
 It resolves standard Pinocchio profiles, embeds its own Glazed help entries into
 an input SQLite database, exposes inputDB/outputDB globals to a go-go-goja
 runtime, and registers a single Geppetto tool named eval_js.`,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return logging.InitLoggerFromCobra(cmd)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(ctx, s, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
@@ -50,6 +56,18 @@ runtime, and registers a single Geppetto tool named eval_js.`,
 	cmd.Flags().StringVar(&s.OutputDBPath, "output-db", "", "Optional path for writable scratch output DB")
 	cmd.Flags().DurationVar(&s.EvalTimeout, "eval-timeout", 5*time.Second, "eval_js execution timeout")
 	cmd.Flags().IntVar(&s.MaxOutputChars, "max-output-chars", 16000, "maximum string/console output characters returned by eval_js")
+
+	if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	helpSystem := help.NewHelpSystem()
+	if err := helpdocs.AddDocToHelpSystem(helpSystem); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	help_cmd.SetupCobraRootCommand(helpSystem, cmd)
 
 	if err := cmd.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -156,7 +174,7 @@ func runPrompt(ctx context.Context, r *runner.Runner, runtime runner.Runtime, se
 		return err
 	}
 	fmt.Fprintln(out)
-	turns.FprintTurn(out, updated)
+	turns.FprintfTurn(out, updated, turns.WithToolDetail(true))
 	fmt.Fprintln(out)
 	*seed = *updated.Clone()
 	return nil
