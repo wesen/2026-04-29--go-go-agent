@@ -42,20 +42,37 @@ func TestStdoutStreamSinkPrintsDeltasAndToolSummaries(t *testing.T) {
 
 func TestStdoutStreamSinkCanPrintToolDetails(t *testing.T) {
 	var out bytes.Buffer
-	sink := newStdoutStreamSink(&out, nil, stdoutStreamOptions{ShowToolArgs: true, ShowToolResults: true, MaxPreviewChars: 20})
+	sink := newStdoutStreamSink(&out, nil, stdoutStreamOptions{ShowToolArgs: true, ShowToolResults: true, MaxPreviewChars: 80})
 
 	_ = sink.PublishEvent(events.NewToolCallEvent(events.EventMetadata{}, events.ToolCall{ID: "call-1", Name: "eval_js", Input: `{"code":"const rows = inputDB.query('select * from docs'); return rows;"}`}))
 	_ = sink.PublishEvent(events.NewToolCallExecutionResultEvent(events.EventMetadata{}, events.ToolResult{ID: "call-1", Name: "eval_js", Result: `{"result":[1,2,3,4,5,6,7,8,9]}`}))
 
 	got := out.String()
-	if !strings.Contains(got, "args:") {
-		t.Fatalf("expected args preview, got:\n%s", got)
+	if !strings.Contains(got, "code:\nconst rows = inputDB.query") {
+		t.Fatalf("expected expanded eval_js code, got:\n%s", got)
 	}
-	if !strings.Contains(got, "result:") {
-		t.Fatalf("expected result preview, got:\n%s", got)
+	if !strings.Contains(got, "result:\n{") {
+		t.Fatalf("expected expanded JSON result, got:\n%s", got)
 	}
-	if !strings.Contains(got, "…") {
-		t.Fatalf("expected truncated preview, got:\n%s", got)
+	if !strings.Contains(got, `"result": [`) {
+		t.Fatalf("expected pretty JSON result body, got:\n%s", got)
+	}
+}
+
+func TestStdoutStreamSinkPrintsThinkingDeltas(t *testing.T) {
+	var out bytes.Buffer
+	sink := newStdoutStreamSink(&out, nil, stdoutStreamOptions{})
+
+	_ = sink.PublishEvent(events.NewThinkingPartialEvent(events.EventMetadata{}, "I should inspect ", "I should inspect "))
+	_ = sink.PublishEvent(events.NewThinkingPartialEvent(events.EventMetadata{}, "the DB", "I should inspect the DB"))
+	_ = sink.PublishEvent(events.NewPartialCompletionEvent(events.EventMetadata{}, "Done", "Done"))
+
+	got := out.String()
+	if !strings.Contains(got, "thinking: I should inspect the DB") {
+		t.Fatalf("expected thinking stream, got:\n%s", got)
+	}
+	if !strings.Contains(got, "assistant: Done") {
+		t.Fatalf("expected assistant stream, got:\n%s", got)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -23,6 +24,7 @@ type stdoutStreamSink struct {
 	opts   stdoutStreamOptions
 
 	assistantStarted bool
+	thinkingStarted  bool
 	lastWasDelta     bool
 }
 
@@ -49,6 +51,8 @@ func (s *stdoutStreamSink) PublishEvent(event events.Event) error {
 	switch e := event.(type) {
 	case *events.EventPartialCompletion:
 		return s.writeDelta(e.Delta)
+	case *events.EventThinkingPartial:
+		return s.writeThinkingDelta(e.Delta)
 	case *events.EventToolCall:
 		return s.writeToolCall(e.ToolCall)
 	case *events.EventToolCallExecute:
@@ -79,6 +83,24 @@ func (s *stdoutStreamSink) writeDelta(delta string) error {
 	return err
 }
 
+func (s *stdoutStreamSink) writeThinkingDelta(delta string) error {
+	if delta == "" {
+		return nil
+	}
+	if !s.thinkingStarted {
+		if err := s.ensureLineBreak(); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprint(s.out, "\nthinking: "); err != nil {
+			return err
+		}
+		s.thinkingStarted = true
+	}
+	_, err := fmt.Fprint(s.out, delta)
+	s.lastWasDelta = true
+	return err
+}
+
 func (s *stdoutStreamSink) writeToolCall(tc events.ToolCall) error {
 	if err := s.ensureLineBreak(); err != nil {
 		return err
@@ -89,7 +111,7 @@ func (s *stdoutStreamSink) writeToolCall(tc events.ToolCall) error {
 		return err
 	}
 	if s.opts.ShowToolArgs && strings.TrimSpace(tc.Input) != "" {
-		if _, err := fmt.Fprintf(s.out, "args: %s\n", truncateOneLine(tc.Input, s.opts.MaxPreviewChars)); err != nil {
+		if _, err := fmt.Fprint(s.out, formatToolInput(name, tc.Input, s.opts.MaxPreviewChars)); err != nil {
 			return err
 		}
 	}
@@ -118,7 +140,7 @@ func (s *stdoutStreamSink) writeToolExecutionResult(tr events.ToolResult) error 
 		return err
 	}
 	if s.opts.ShowToolResults && strings.TrimSpace(tr.Result) != "" {
-		if _, err := fmt.Fprintf(s.out, "result: %s\n", truncateOneLine(tr.Result, s.opts.MaxPreviewChars)); err != nil {
+		if _, err := fmt.Fprint(s.out, formatToolResult(tr.Result, s.opts.MaxPreviewChars)); err != nil {
 			return err
 		}
 	}
@@ -136,7 +158,7 @@ func (s *stdoutStreamSink) writeToolResult(tr events.ToolResult) error {
 		return err
 	}
 	if s.opts.ShowToolResults && strings.TrimSpace(tr.Result) != "" {
-		if _, err := fmt.Fprintf(s.out, "result: %s\n", truncateOneLine(tr.Result, s.opts.MaxPreviewChars)); err != nil {
+		if _, err := fmt.Fprint(s.out, formatToolResult(tr.Result, s.opts.MaxPreviewChars)); err != nil {
 			return err
 		}
 	}
@@ -162,6 +184,40 @@ func (s *stdoutStreamSink) ensureLineBreak() error {
 	return nil
 }
 
+func formatToolInput(toolName string, input string, max int) string {
+	if strings.EqualFold(toolName, "eval_js") {
+		var payload struct {
+			Code  string         `json:"code"`
+			Input map[string]any `json:"input"`
+		}
+		if err := json.Unmarshal([]byte(input), &payload); err == nil && strings.TrimSpace(payload.Code) != "" {
+			var b strings.Builder
+			b.WriteString("code:\n")
+			b.WriteString(truncateMultiline(payload.Code, max))
+			b.WriteString("\n")
+			if len(payload.Input) > 0 {
+				if inputJSON, err := json.MarshalIndent(payload.Input, "", "  "); err == nil {
+					b.WriteString("input:\n")
+					b.WriteString(truncateMultiline(string(inputJSON), max))
+					b.WriteString("\n")
+				}
+			}
+			return b.String()
+		}
+	}
+	return fmt.Sprintf("args: %s\n", truncateOneLine(input, max))
+}
+
+func formatToolResult(result string, max int) string {
+	var formatted any
+	if err := json.Unmarshal([]byte(result), &formatted); err == nil {
+		if b, err := json.MarshalIndent(formatted, "", "  "); err == nil {
+			return "result:\n" + truncateMultiline(string(b), max) + "\n"
+		}
+	}
+	return fmt.Sprintf("result: %s\n", truncateOneLine(result, max))
+}
+
 func defaultString(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -171,6 +227,17 @@ func defaultString(value string, fallback string) string {
 
 func truncateOneLine(value string, max int) string {
 	value = strings.Join(strings.Fields(value), " ")
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return value[:max-1] + "…"
+}
+
+func truncateMultiline(value string, max int) string {
+	value = strings.TrimSpace(value)
 	if max <= 0 || len(value) <= max {
 		return value
 	}
