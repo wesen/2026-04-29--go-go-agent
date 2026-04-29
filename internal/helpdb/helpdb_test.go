@@ -17,13 +17,13 @@ func TestPrepareInputDBLoadsEmbeddedHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareInputDB failed: %v", err)
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 
 	rows, err := prepared.DB.QueryContext(ctx, `SELECT slug, title FROM docs ORDER BY slug`)
 	if err != nil {
 		t.Fatalf("query docs view failed: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	slugs := map[string]bool{}
 	for rows.Next() {
@@ -52,7 +52,7 @@ func TestPrepareOutputDBCreatesNotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareOutputDB failed: %v", err)
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 
 	if _, err := prepared.DB.ExecContext(ctx, `INSERT INTO notes(key, value) VALUES (?, ?)`, "k", "v"); err != nil {
 		t.Fatalf("insert note: %v", err)

@@ -184,7 +184,7 @@ func (s *stdoutStreamSink) ensureLineBreak() error {
 	return nil
 }
 
-func formatToolInput(toolName string, input string, max int) string {
+func formatToolInput(toolName string, input string, limit int) string {
 	if strings.EqualFold(toolName, "eval_js") {
 		var payload struct {
 			Code  string         `json:"code"`
@@ -193,29 +193,29 @@ func formatToolInput(toolName string, input string, max int) string {
 		if err := json.Unmarshal([]byte(input), &payload); err == nil && strings.TrimSpace(payload.Code) != "" {
 			var b strings.Builder
 			b.WriteString("code:\n")
-			b.WriteString(truncateMultiline(payload.Code, max))
+			b.WriteString(truncateMultiline(payload.Code, limit))
 			b.WriteString("\n")
 			if len(payload.Input) > 0 {
 				if inputJSON, err := json.MarshalIndent(payload.Input, "", "  "); err == nil {
 					b.WriteString("input:\n")
-					b.WriteString(truncateMultiline(string(inputJSON), max))
+					b.WriteString(truncateMultiline(string(inputJSON), limit))
 					b.WriteString("\n")
 				}
 			}
 			return b.String()
 		}
 	}
-	return fmt.Sprintf("args: %s\n", truncateOneLine(input, max))
+	return fmt.Sprintf("args: %s\n", truncateOneLine(input, limit))
 }
 
-func formatToolResult(result string, max int) string {
+func formatToolResult(result string, limit int) string {
 	var formatted any
 	if err := json.Unmarshal([]byte(result), &formatted); err == nil {
 		if b, err := json.MarshalIndent(formatted, "", "  "); err == nil {
-			return "result:\n" + truncateMultiline(string(b), max) + "\n"
+			return "result:\n" + truncateMultiline(string(b), limit) + "\n"
 		}
 	}
-	return fmt.Sprintf("result: %s\n", truncateOneLine(result, max))
+	return fmt.Sprintf("result: %s\n", truncateOneLine(result, limit))
 }
 
 func defaultString(value string, fallback string) string {
@@ -225,24 +225,24 @@ func defaultString(value string, fallback string) string {
 	return strings.TrimSpace(value)
 }
 
-func truncateOneLine(value string, max int) string {
+func truncateOneLine(value string, limit int) string {
 	value = strings.Join(strings.Fields(value), " ")
-	if max <= 0 || len(value) <= max {
+	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	if max <= 1 {
+	if limit <= 1 {
 		return "…"
 	}
-	return value[:max-1] + "…"
+	return value[:limit-1] + "…"
 }
 
-func truncateMultiline(value string, max int) string {
+func truncateMultiline(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if max <= 0 || len(value) <= max {
+	if limit <= 0 || len(value) <= limit {
 		return value
 	}
-	if max <= 1 {
+	if limit <= 1 {
 		return "…"
 	}
-	return value[:max-1] + "…"
+	return value[:limit-1] + "…"
 }

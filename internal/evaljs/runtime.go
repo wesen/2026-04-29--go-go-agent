@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-go-golems/geppetto/pkg/inference/runner"
@@ -226,11 +225,4 @@ func configureRuntime(ctx context.Context, b *scopedjs.Builder, scope Scope) (Me
 	}
 
 	return Meta{Globals: []string{"inputDB", "outputDB"}}, nil
-}
-
-func trimPreview(s string, max int) string {
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	return strings.TrimSpace(s[:max]) + "…"
 }

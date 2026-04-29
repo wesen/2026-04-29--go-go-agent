@@ -29,7 +29,7 @@ func TestBuildRegistersInjectedEvalToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build eval runtime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	if rt.Tool == nil {
 		t.Fatalf("expected injected eval tool")

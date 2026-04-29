@@ -138,13 +138,13 @@ func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Wr
 	if err != nil {
 		return fmt.Errorf("prepare input DB: %w", err)
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 
 	output, err := helpdb.PrepareOutputDB(ctx, s.OutputDBPath)
 	if err != nil {
 		return fmt.Errorf("prepare output DB: %w", err)
 	}
-	defer output.Close()
+	defer func() { _ = output.Close() }()
 
 	scope := evaljs.Scope{InputDB: input.DB, OutputDB: output.DB}
 	evalRuntimeFactory, err := evaljs.NewEngineFactory(scope)
@@ -179,7 +179,7 @@ func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Wr
 	if err != nil {
 		return fmt.Errorf("build eval_js runtime: %w", err)
 	}
-	defer evalRuntime.Close()
+	defer func() { _ = evalRuntime.Close() }()
 
 	r := runner.New()
 	runtime := runner.Runtime{
@@ -206,7 +206,9 @@ func repl(ctx context.Context, r *runner.Runner, runtime runner.Runtime, logDB *
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	fmt.Fprintln(out, "chat REPL. Type :help for commands, :quit to exit.")
 	for {
-		fmt.Fprint(out, "> ")
+		if _, err := fmt.Fprint(out, "> "); err != nil {
+			return err
+		}
 		if !scanner.Scan() {
 			return scanner.Err()
 		}

@@ -17,12 +17,12 @@ func TestOpenCreatesPrivateLogSchemasAndEvalSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare input: %v", err)
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	output, err := helpdb.PrepareOutputDB(ctx, "")
 	if err != nil {
 		t.Fatalf("prepare output: %v", err)
 	}
-	defer output.Close()
+	defer func() { _ = output.Close() }()
 
 	factory, err := evaljs.NewEngineFactory(evaljs.Scope{InputDB: input.DB, OutputDB: output.DB})
 	if err != nil {
@@ -34,7 +34,7 @@ func TestOpenCreatesPrivateLogSchemasAndEvalSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open log db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	for _, table := range []string{
 		"turns",

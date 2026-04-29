@@ -15,7 +15,7 @@ import (
 func TestEvalToolExecutesThroughReplAPIAndPersistsCorrelation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `
 const rows = inputDB.query("SELECT slug, title FROM docs WHERE slug = ?", "eval-js-api");
@@ -61,7 +61,7 @@ result
 func TestEvalToolPersistsTopLevelDeclarationsAcrossCalls(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	first, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `
 const base = 41;
@@ -93,7 +93,7 @@ plusOne(base)
 func TestEvalToolSetsPerCallInputAndGlobalAliases(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{
 		Code:  `window.answer = input.value * 2; global.answer === globalThis.answer && globalThis.answer`,
@@ -127,7 +127,7 @@ func TestEvalToolSetsPerCallInputAndGlobalAliases(t *testing.T) {
 func TestEvalToolReturnsMetadataForFunctionFinalExpression(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `function helper() { return 1; } helper`})
 	if err != nil {
@@ -151,7 +151,7 @@ func TestEvalToolReturnsMetadataForFunctionFinalExpression(t *testing.T) {
 func TestEvalToolReturnsTopLevelReturnErrorsAsPayload(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `return 42;`})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestEvalToolReturnsTopLevelReturnErrorsAsPayload(t *testing.T) {
 func TestEvalToolReturnsReadOnlyErrorsAsPayload(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `inputDB.exec("DELETE FROM sections")`})
 	if err != nil {
@@ -187,7 +187,7 @@ func TestEvalToolReturnsReadOnlyErrorsAsPayload(t *testing.T) {
 func TestEvalToolReturnsSerializationErrorsAsPayload(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `const x = {}; x.self = x; x`})
 	if err != nil {

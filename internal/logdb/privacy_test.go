@@ -12,7 +12,7 @@ import (
 func TestEvalRuntimeDoesNotExposePrivateLogTables(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `
 const tables = {

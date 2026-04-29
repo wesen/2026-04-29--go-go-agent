@@ -200,7 +200,7 @@ func queryRows(ctx context.Context, db *sql.DB, query string, args ...any) ([]ro
 	if err != nil {
 		return nil, err
 	}
-	defer rs.Close()
+	defer func() { _ = rs.Close() }()
 	cols, err := rs.Columns()
 	if err != nil {
 		return nil, err
@@ -261,15 +261,15 @@ func normalizeDBValue(v any) any {
 	}
 }
 
-func preview(s string, max int) string {
+func preview(s string, limit int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if max <= 0 || len(s) <= max {
+	if limit <= 0 || len(s) <= limit {
 		return s
 	}
-	if max <= 1 {
+	if limit <= 1 {
 		return "…"
 	}
-	return s[:max-1] + "…"
+	return s[:limit-1] + "…"
 }
 
 func safeIdent(s string) bool {
@@ -277,7 +277,7 @@ func safeIdent(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+		if r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}

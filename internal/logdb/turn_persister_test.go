@@ -10,7 +10,7 @@ import (
 func TestTurnLoggerPersistsSnapshotIntoChatstoreTables(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	turn := &turns.Turn{ID: "turn-test"}
 	if err := turns.KeyTurnMetaSessionID.Set(&turn.Metadata, db.ChatSessionID); err != nil {
