@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/dop251/goja"
 	"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
 	gojengine "github.com/go-go-golems/go-go-goja/engine"
 	"github.com/go-go-golems/go-go-goja/pkg/replsession"
@@ -41,13 +41,13 @@ func (e *EvalTool) Eval(ctx context.Context, in scopedjs.EvalInput) (scopedjs.Ev
 		return scopedjs.EvalOutput{Error: "eval_js replapi backend is not configured"}, nil
 	}
 	started := time.Now().UTC()
-	source, err := buildEvalCellSource(in)
-	if err != nil {
+	source := buildEvalCellSource(in)
+	if err := e.prepareEvalGlobals(ctx, in); err != nil {
 		return scopedjs.EvalOutput{Error: err.Error()}, nil
 	}
 
 	resp, evalErr := e.DB.ReplApp.Evaluate(ctx, e.DB.EvalSessionID, source)
-	resultJSON, resultErr := e.readLastResultJSON(ctx, evalErr)
+	resultJSON, resultErr := resultJSONFromResponse(resp, evalErr)
 	out := convertReplResponseToEvalOutput(resp, evalErr, resultJSON, resultErr, started)
 
 	corr := EvalCorrelation{
@@ -68,39 +68,46 @@ func (e *EvalTool) Eval(ctx context.Context, in scopedjs.EvalInput) (scopedjs.Ev
 	return out, nil
 }
 
-func buildEvalCellSource(in scopedjs.EvalInput) (string, error) {
+func buildEvalCellSource(in scopedjs.EvalInput) string {
+	code := strings.TrimSpace(in.Code)
+	if code == "" {
+		return "undefined"
+	}
+	return code
+}
+
+func (e *EvalTool) prepareEvalGlobals(ctx context.Context, in scopedjs.EvalInput) error {
 	input := in.Input
 	if input == nil {
 		input = map[string]any{}
 	}
-	inputJSON, err := json.Marshal(input)
-	if err != nil {
-		return "", fmt.Errorf("marshal eval input: %w", err)
-	}
-	return fmt.Sprintf(`
-const __chat_eval_input = %s;
-const __chat_eval_result = await (async function(input) {
-%s
-})(__chat_eval_input);
-globalThis.__chat_eval_last_json = JSON.stringify({ result: __chat_eval_result });
-globalThis.__chat_eval_last_json;
-`, inputJSON, in.Code), nil
+	return e.DB.ReplApp.WithRuntime(ctx, e.DB.EvalSessionID, func(rt *gojengine.Runtime) error {
+		vm := rt.VM
+		if err := vm.Set("input", input); err != nil {
+			return err
+		}
+		global := vm.GlobalObject()
+		if err := global.Set("window", global); err != nil {
+			return err
+		}
+		if err := global.Set("global", global); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
-func (e *EvalTool) readLastResultJSON(ctx context.Context, evalErr error) (string, error) {
+func resultJSONFromResponse(resp *replsession.EvaluateResponse, evalErr error) (string, error) {
 	if evalErr != nil {
 		return "", nil
 	}
-	var resultJSON string
-	err := e.DB.ReplApp.WithRuntime(ctx, e.DB.EvalSessionID, func(rt *gojengine.Runtime) error {
-		v := rt.VM.Get("__chat_eval_last_json")
-		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
-			return fmt.Errorf("eval_js did not set __chat_eval_last_json")
-		}
-		resultJSON = v.String()
-		return nil
-	})
-	return resultJSON, err
+	if resp == nil || resp.Cell == nil {
+		return "", fmt.Errorf("eval_js returned no repl cell")
+	}
+	if resp.Cell.Execution.ResultJSON == "" {
+		return "", fmt.Errorf("replsession did not provide structured result JSON")
+	}
+	return resp.Cell.Execution.ResultJSON, nil
 }
 
 func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, evalErr error, resultJSON string, resultErr error, started time.Time) scopedjs.EvalOutput {
@@ -126,10 +133,15 @@ func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, evalErr
 		return out
 	}
 	var envelope struct {
-		Result any `json:"result"`
+		Result any    `json:"result"`
+		Error  string `json:"error,omitempty"`
 	}
 	if decodeErr := json.Unmarshal([]byte(resultJSON), &envelope); decodeErr != nil {
 		out.Error = "eval_js result was not valid JSON: " + decodeErr.Error()
+		return out
+	}
+	if envelope.Error != "" {
+		out.Error = envelope.Error
 		return out
 	}
 	out.Result = envelope.Result

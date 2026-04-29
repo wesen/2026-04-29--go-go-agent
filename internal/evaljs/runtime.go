@@ -75,7 +75,7 @@ func (r *Runtime) Registrar() runner.ToolRegistrar {
 		}
 		def, err := geptools.NewToolFromFunc(
 			r.Spec.Tool.Name,
-			scopedjs.BuildDescription(r.Spec.Tool.Description, Manifest(), "Calls execute in a persistent replapi/replsession session; runtime state and evaluation history persist across calls."),
+			scopedjs.BuildDescription(r.Spec.Tool.Description, Manifest(), "Calls execute as persistent replapi/replsession cells; top-level declarations and evaluation history persist across calls."),
 			func(ctx context.Context, in EvalInput) (EvalOutput, error) {
 				return r.Tool.Eval(ctx, in)
 			},
@@ -110,17 +110,23 @@ func NewSpec(opts Options) scopedjs.EnvironmentSpec[Scope, Meta] {
 			Description: scopedjs.ToolDescription{
 				Summary: "Execute JavaScript against the chat agent's embedded help SQLite database and writable scratch database.",
 				Notes: []string{
-					"The runtime exposes inputDB and outputDB globals.",
+					"The runtime exposes inputDB, outputDB, input, globalThis, window, and global globals.",
 					"inputDB is read-only and contains help entries embedded into this chat binary.",
 					"The canonical help table is sections; docs is a compatibility view over sections.",
 					"outputDB is writable scratch space with a notes table.",
 					"Use parameterized SQL with ? placeholders when incorporating input values.",
-					"Return a JSON-serializable value from the script.",
+					"Write code as a persistent REPL cell; top-level declarations persist across calls.",
+					"The tool result is the final expression value; do not use top-level return.",
+					"Use globalThis for explicit global state; window and global are aliases of globalThis.",
+					"The final expression must be JSON-serializable for tool output.",
 				},
 				StarterSnippets: []string{
-					`const rows = inputDB.query("SELECT slug, title, short FROM docs ORDER BY title LIMIT 10"); return rows;`,
-					`const matches = inputDB.query("SELECT slug, title FROM docs WHERE content LIKE ? LIMIT 10", "%outputDB%"); return matches;`,
-					`outputDB.exec("INSERT INTO notes(key, value) VALUES (?, ?)", "summary", "important finding"); return outputDB.query("SELECT * FROM notes");`,
+					`const rows = inputDB.query("SELECT slug, title, short FROM docs ORDER BY title LIMIT 10"); rows`,
+					`const matches = inputDB.query("SELECT slug, title FROM docs WHERE content LIKE ? LIMIT 10", "%outputDB%"); matches`,
+					`outputDB.exec("INSERT INTO notes(key, value) VALUES (?, ?)", "summary", "important finding"); outputDB.query("SELECT * FROM notes")`,
+					`function summarizeDoc(row) { return row.slug + ": " + row.title; }
+const rows = inputDB.query("SELECT slug, title FROM docs ORDER BY title LIMIT 3");
+rows.map(summarizeDoc)`,
 				},
 			},
 			Tags:    []string{"chat", "javascript", "sqlite", "help"},
@@ -140,6 +146,10 @@ func Manifest() scopedjs.EnvironmentManifest {
 		Globals: []scopedjs.GlobalDoc{
 			{Name: "inputDB", Type: "object", Description: "Read-only SQLite facade for embedded chat help entries. Methods: query(sql, ...args), exec(sql, ...args) which errors, schema()."},
 			{Name: "outputDB", Type: "object", Description: "Writable scratch SQLite facade. Methods: query(sql, ...args), exec(sql, ...args), schema(). Default table: notes."},
+			{Name: "input", Type: "object", Description: "Per-call input object passed in the eval_js tool request."},
+			{Name: "globalThis", Type: "object", Description: "Canonical persistent JavaScript global object."},
+			{Name: "window", Type: "object", Description: "Alias of globalThis for browser-style snippets; DOM APIs are not implied."},
+			{Name: "global", Type: "object", Description: "Alias of globalThis for Node-style snippets; Node built-ins are not implied."},
 		},
 		Helpers: []scopedjs.HelperDoc{
 			{Name: "parameterized SQL", Signature: `inputDB.query("SELECT * FROM docs WHERE slug = ?", slug)`, Description: "Use ? placeholders and pass bind arguments after the SQL string."},

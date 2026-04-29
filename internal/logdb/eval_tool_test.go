@@ -21,7 +21,8 @@ func TestEvalToolExecutesThroughReplAPIAndPersistsCorrelation(t *testing.T) {
 const rows = inputDB.query("SELECT slug, title FROM docs WHERE slug = ?", "eval-js-api");
 console.log("rows", rows.length);
 outputDB.exec("INSERT INTO notes(key, value) VALUES (?, ?)", "seen", rows[0].slug);
-return {slug: rows[0].slug, notes: outputDB.query("SELECT key, value FROM notes")};
+const result = {slug: rows[0].slug, notes: outputDB.query("SELECT key, value FROM notes")};
+result
 `})
 	if err != nil {
 		t.Fatalf("eval returned host error: %v", err)
@@ -57,12 +58,92 @@ return {slug: rows[0].slug, notes: outputDB.query("SELECT key, value FROM notes"
 	}
 }
 
+func TestEvalToolPersistsTopLevelDeclarationsAcrossCalls(t *testing.T) {
+	ctx := context.Background()
+	db := openTestLogDB(t, ctx)
+	defer db.Close()
+
+	first, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `
+const base = 41;
+function plusOne(x) { return x + 1; }
+plusOne(base)
+`})
+	if err != nil {
+		t.Fatalf("first eval returned host error: %v", err)
+	}
+	if first.Error != "" {
+		t.Fatalf("first eval returned error payload: %s", first.Error)
+	}
+	if got := first.Result; got != float64(42) {
+		t.Fatalf("expected first result 42, got %T %#v", got, got)
+	}
+
+	second, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `plusOne(base + 1)`})
+	if err != nil {
+		t.Fatalf("second eval returned host error: %v", err)
+	}
+	if second.Error != "" {
+		t.Fatalf("second eval returned error payload: %s", second.Error)
+	}
+	if got := second.Result; got != float64(43) {
+		t.Fatalf("expected second result 43, got %T %#v", got, got)
+	}
+}
+
+func TestEvalToolSetsPerCallInputAndGlobalAliases(t *testing.T) {
+	ctx := context.Background()
+	db := openTestLogDB(t, ctx)
+	defer db.Close()
+
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{
+		Code:  `window.answer = input.value * 2; global.answer === globalThis.answer && globalThis.answer`,
+		Input: map[string]any{"value": 21},
+	})
+	if err != nil {
+		t.Fatalf("eval returned host error: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("eval returned error payload: %s", out.Error)
+	}
+	if got := out.Result; got != float64(42) {
+		t.Fatalf("expected result 42, got %T %#v", got, got)
+	}
+
+	out, err = db.EvalTool().Eval(ctx, scopedjs.EvalInput{
+		Code:  `input.value * 2`,
+		Input: map[string]any{"value": 5},
+	})
+	if err != nil {
+		t.Fatalf("second eval returned host error: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("second eval returned error payload: %s", out.Error)
+	}
+	if got := out.Result; got != float64(10) {
+		t.Fatalf("expected per-call input result 10, got %T %#v", got, got)
+	}
+}
+
+func TestEvalToolReturnsTopLevelReturnErrorsAsPayload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestLogDB(t, ctx)
+	defer db.Close()
+
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `return 42;`})
+	if err != nil {
+		t.Fatalf("eval returned host error: %v", err)
+	}
+	if out.Error == "" {
+		t.Fatalf("expected top-level return error payload")
+	}
+}
+
 func TestEvalToolReturnsReadOnlyErrorsAsPayload(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
 	defer db.Close()
 
-	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `return inputDB.exec("DELETE FROM sections");`})
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `inputDB.exec("DELETE FROM sections")`})
 	if err != nil {
 		t.Fatalf("eval returned host error: %v", err)
 	}
@@ -84,7 +165,7 @@ func TestEvalToolReturnsSerializationErrorsAsPayload(t *testing.T) {
 	db := openTestLogDB(t, ctx)
 	defer db.Close()
 
-	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `const x = {}; x.self = x; return x;`})
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `const x = {}; x.self = x; x`})
 	if err != nil {
 		t.Fatalf("eval returned host error: %v", err)
 	}

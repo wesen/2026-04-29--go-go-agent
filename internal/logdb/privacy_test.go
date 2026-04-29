@@ -15,10 +15,11 @@ func TestEvalRuntimeDoesNotExposePrivateLogTables(t *testing.T) {
 	defer db.Close()
 
 	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `
-return {
+const tables = {
   inputTables: inputDB.schema().tables,
   outputTables: outputDB.schema().tables
 };
+tables
 `})
 	if err != nil {
 		t.Fatalf("eval returned host error: %v", err)
