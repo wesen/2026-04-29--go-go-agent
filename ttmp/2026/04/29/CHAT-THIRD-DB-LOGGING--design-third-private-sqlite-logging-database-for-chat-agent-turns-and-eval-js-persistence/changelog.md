@@ -105,3 +105,24 @@ Committed live smoke fix for exact replapi eval result extraction (commit 9a6ea2
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go — Exact JSON result extraction from live repl runtime
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt — Live tmux smoke evidence
 
+
+## 2026-04-29
+
+Changed turn persistence defaults: final turns are persisted by default, while intermediate turn snapshots require --log-db-turn-snapshots; live tmux check verified only final memberships are written without the flag.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — Added --log-db-turn-snapshots and gated SnapshotHook wiring
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/design-doc/01-private-logging-database-for-chat-agent-turns-and-eval-js-execution.md — Updated CLI flag design
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-final-only-turn-persistence-2026-04-29.txt — Final-only live verification evidence
+
+
+## 2026-04-29
+
+Committed final-only turn persistence default and opt-in intermediate snapshots via --log-db-turn-snapshots (commit 17e6e71023dde1e78f981b4a54b22d19db98f93b).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — SnapshotHook is attached only when --log-db-turn-snapshots is enabled
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-final-only-turn-persistence-2026-04-29.txt — Final-only live verification evidence
+

@@ -14,10 +14,13 @@ Intent: long-term
 Owners: []
 RelatedFiles:
     - Path: cmd/chat/main.go
+      Note: Final-only default turn persistence and optional snapshot flag
     - Path: internal/evaljs/runtime.go
     - Path: internal/logdb/eval_tool.go
       Note: Live smoke fix for exact replapi result extraction
     - Path: internal/logdb/logdb.go
+    - Path: ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-final-only-turn-persistence-2026-04-29.txt
+      Note: Live final-only turn persistence verification
     - Path: ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt
       Note: Sanitized live LLM smoke DB evidence
 ExternalSources: []
@@ -26,6 +29,7 @@ LastUpdated: 2026-04-29T09:54:36-04:00
 WhatFor: Resume or review the private log DB implementation without losing context.
 WhenToUse: Use before continuing CHAT-THIRD-DB-LOGGING implementation, validation, or review.
 ---
+
 
 
 # Diary
@@ -507,3 +511,66 @@ I fixed the bug by changing the eval wrapper to assign the exact `JSON.stringify
 - Fixed DB path: `/tmp/chat-log-live-fixed.sqlite`.
 - Fixed run tmux session: `chat-logdb-live-fixed`.
 - Evidence file: `ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt`.
+
+## Step 8: Make intermediate turn snapshots opt-in
+
+After reviewing the live DB counts, the user clarified that we only need final turns for now. I changed the chat command so final turn persistence remains enabled through `runner.StartRequest.Persister`, but intermediate `SnapshotHook` persistence is gated behind a new flag.
+
+The new flag is `--log-db-turn-snapshots`. Without it, the private DB writes only final turn memberships, which avoids multiplying `turn_block_membership` rows by every `pre_inference`, `post_inference`, and `post_tools` snapshot.
+
+### Prompt Context
+
+**User prompt (verbatim):** "ok, make a flag to enable the turn persistence, we actually only need the final for now."
+
+**Assistant interpretation:** Keep final turn persistence by default, but make verbose intermediate snapshot persistence opt-in through a CLI flag.
+
+**Inferred user intent:** Reduce DB verbosity while preserving enough final state for near-term debugging/postprocessing.
+
+**Commit (code):** 17e6e71023dde1e78f981b4a54b22d19db98f93b — "Make intermediate turn snapshots opt-in"
+
+### What I did
+- Added `settings.LogDBTurnSnapshots`.
+- Added CLI flag `--log-db-turn-snapshots` with default `false`.
+- Changed `runPrompt` so `req.Persister = logDB.TurnPersister()` is always set when logging is enabled, but `req.SnapshotHook = logDB.SnapshotHook()` is set only when `--log-db-turn-snapshots` is true.
+- Updated the design doc flag table and runner wiring snippet.
+- Ran `go test ./... -count=1`.
+- Ran a live tmux check without the new flag using `/tmp/chat-log-final-only.sqlite`.
+
+### Why
+- `turn_block_membership` stores one row per block per saved snapshot, so intermediate phases intentionally multiply rows.
+- The current need is final turn state plus eval persistence, not every intermediate loop state.
+
+### What worked
+- CLI help lists `--log-db-turn-snapshots`.
+- Live final-only run succeeded with `eval_js`.
+- DB verification without the flag showed:
+  - `turns|1`
+  - `blocks|6`
+  - `membership|6`
+  - phases: `final|6`
+- No `pre_inference`, `post_inference`, or `post_tools` rows were written without the flag.
+
+### What didn't work
+- N/A for this step.
+
+### What I learned
+- The cleanest control point is in `cmd/chat/main.go`; `internal/logdb` can still expose `SnapshotHook`, but the CLI decides whether to attach it to the runner request.
+
+### What was tricky to build
+- The wording was slightly ambiguous: "turn persistence" could mean all turn persistence, but "we actually only need the final" implies final persistence should stay on while intermediate snapshots become opt-in.
+
+### What warrants a second pair of eyes
+- Confirm the flag name is acceptable. Alternatives could be `--log-db-snapshots` or `--log-db-intermediate-turns`.
+- Confirm whether final turn persistence should also get a separate disable flag later.
+
+### What should be done in the future
+- If snapshot logging is used in debugging, run one explicit smoke test with `--log-db-turn-snapshots` to verify the old verbose phase behavior still works.
+
+### Code review instructions
+- Review `cmd/chat/main.go` around flag definitions and `runPrompt` request construction.
+- Review the evidence file `sources/live-final-only-turn-persistence-2026-04-29.txt`.
+- Validate with `go test ./... -count=1` and optionally rerun the final-only tmux command.
+
+### Technical details
+- Final-only DB path used for verification: `/tmp/chat-log-final-only.sqlite`.
+- Evidence file: `ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-final-only-turn-persistence-2026-04-29.txt`.

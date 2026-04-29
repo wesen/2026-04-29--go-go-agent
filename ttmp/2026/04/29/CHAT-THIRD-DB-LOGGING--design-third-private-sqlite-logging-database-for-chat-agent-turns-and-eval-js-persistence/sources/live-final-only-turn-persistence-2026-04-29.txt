@@ -1,0 +1,42 @@
+# Live final-only turn persistence check - 2026-04-29
+
+Change: `--log-db-turn-snapshots` now gates intermediate `SnapshotHook` persistence. By default, chat still persists final turns through `Persister`, but does not persist `pre_inference`, `post_inference`, or `post_tools` snapshots.
+
+Command run in tmux:
+
+```bash
+go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-log-final-only.sqlite --log-db-keep-temp 2>&1 | tee /tmp/chat-log-final-only-output.txt
+```
+
+Prompt:
+
+```text
+Use eval_js to list the first embedded help entry slug and title.
+```
+
+Observed tool result:
+
+```json
+{"result":[{"slug":"database-globals-api","title":"Database Globals API"}],"durationMs":1}
+```
+
+DB verification:
+
+```text
+--- final-only counts
+turns|1
+blocks|6
+membership|6
+evaluations|1
+eval_tool_calls|1
+
+--- phases
+final|6
+
+--- snapshot sizes
+bdd6dd39-e9c3-4b22-a6c0-a69b3aebfdf3|final|1777472872734|6
+```
+
+Conclusion:
+
+Without `--log-db-turn-snapshots`, only final turn memberships are written. This avoids the verbose per-phase membership multiplication seen in the prior live smoke test.

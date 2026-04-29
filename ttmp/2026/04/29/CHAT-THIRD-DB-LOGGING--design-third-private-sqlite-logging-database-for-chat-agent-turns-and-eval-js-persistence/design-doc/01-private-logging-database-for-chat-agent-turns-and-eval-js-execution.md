@@ -15,7 +15,7 @@ Owners: []
 RelatedFiles: []
 ExternalSources: []
 Summary: "Design for adding a third private SQLite database to the chat agent that logs Geppetto/Pinocchio turns and eval_js executions without exposing the DB to JavaScript or the model."
-LastUpdated: 2026-04-29T09:54:36-04:00
+LastUpdated: 2026-04-29T14:35:00-04:00
 WhatFor: "Use this before implementing private audit/persistence for the chat agent."
 WhenToUse: "When adding host-only session logging, turn persistence, eval_js call persistence, replay/debug tooling, or post-run inspection to the chat binary."
 ---
@@ -909,6 +909,7 @@ Add flags to `chat`:
 | `--log-db-strict` | `false` | Fail the chat run if persistence fails. |
 | `--no-log-db` | `false` | Disable private DB logging entirely. |
 | `--log-db-keep-temp` | `false` | If using a temp log DB, do not delete it at exit. Useful for debugging. |
+| `--log-db-turn-snapshots` | `false` | Persist intermediate turn snapshots (`pre_inference`, `post_inference`, `post_tools`) in addition to final turns. |
 
 Recommended default for development:
 
@@ -930,7 +931,8 @@ type settings struct {
     LogDBPath     string
     LogDBStrict   bool
     NoLogDB       bool
-    LogDBKeepTemp bool
+    LogDBKeepTemp      bool
+    LogDBTurnSnapshots bool
 }
 ```
 
@@ -961,7 +963,9 @@ req := runner.StartRequest{
     Runtime:   runtime,
 }
 if logDB != nil {
-    req.SnapshotHook = logDB.SnapshotHook()
+    if s.LogDBTurnSnapshots {
+        req.SnapshotHook = logDB.SnapshotHook()
+    }
     req.Persister = logDB.TurnPersister()
 }
 _, updated, err := r.Run(ctx, req)
@@ -1176,7 +1180,7 @@ This section is intended as a checklist for follow-up documentation, implementat
 
 ### Phase 4: Wire CLI flags and lifecycle
 
-- Add `--log-db`, `--no-log-db`, `--log-db-strict`, and `--log-db-keep-temp`.
+- Add `--log-db`, `--no-log-db`, `--log-db-strict`, `--log-db-keep-temp`, and `--log-db-turn-snapshots`.
 - Print/log path at debug level.
 - Ensure `Close()` closes all DB handles exactly once.
 - Ensure private DB is never in `evaljs.Scope`.
