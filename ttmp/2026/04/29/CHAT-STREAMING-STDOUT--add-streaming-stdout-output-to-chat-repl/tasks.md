@@ -11,3 +11,5 @@
 - [x] Update diary/changelog and validate ticket with docmgr doctor
 - [x] Implement stdout EventSink with formatting tests
 - [x] Add --stream and --print-final-turn flags and wire runPrompt EventSinks
+- [x] Expand streaming eval_js tool call code and tool results in REPL output
+- [x] Add opt-in streaming support for thinking/reasoning token deltas

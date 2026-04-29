@@ -25,6 +25,8 @@ RelatedFiles:
       Note: streaming sink formatting tests
     - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/reference/02-article-from-eval-js-to-persistent-agent-runtime.md
       Note: Ticket-local copy of follow-up article
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/sources/live-streaming-details-thinking-smoke-2026-04-29.txt
+      Note: Live evidence for expanded tool details and thinking flag
     - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/sources/live-streaming-smoke-2026-04-29.txt
       Note: live streaming smoke evidence
 ExternalSources: []
@@ -33,6 +35,7 @@ LastUpdated: 2026-04-29T10:31:13.01104851-04:00
 WhatFor: ""
 WhenToUse: ""
 ---
+
 
 
 

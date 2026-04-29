@@ -209,7 +209,7 @@ The event package contains many event types. The stdout UX should start with a f
 | Event type | Go type | Meaning | Recommended stdout behavior |
 |---|---|---|---|
 | `partial` | `*events.EventPartialCompletion` | A text delta from the assistant output stream. | Write `Delta` directly to stdout. |
-| `partial-thinking` | `*events.EventThinkingPartial` | Reasoning/thinking delta. This may be provider-sensitive. | Default: suppress. Optional debug flag can show dimmed/labelled thinking later. |
+| `partial-thinking` | `*events.EventThinkingPartial` | Reasoning/thinking delta. | Print with a `thinking:` label when providers emit it. |
 | `tool-call` | `*events.EventToolCall` | Provider emitted a tool call. | Print a compact newline-delimited tool call banner. |
 | `tool-call-execute` | `*events.EventToolCallExecute` | Local tool execution is about to start. | Print a compact execution banner, e.g. `[tool eval_js running]`. |
 | `tool-call-execution-result` | `*events.EventToolCallExecutionResult` | Local tool execution finished. | Print success/error summary, not full huge payload by default. |
@@ -586,7 +586,7 @@ Then verify:
 - Create `cmd/chat/stream_stdout.go`.
 - Implement `stdoutStreamSink` as an `events.EventSink`.
 - Handle `partial`, tool call, tool execution result, and error events.
-- Suppress reasoning deltas by default.
+- Print reasoning/thinking deltas with a clear `thinking:` label when providers emit them.
 - Add formatting tests.
 
 ### Phase 2: Add flags and settings
@@ -616,15 +616,15 @@ Then verify:
 - Do not persist partial deltas as canonical conversation state. Use final turns for persistence.
 - Do not expose private log DB state in streaming output. Tool summaries should be compact and user-facing.
 - Do not assume all providers emit identical events. Handle the common event types and ignore unknown events.
-- Do not print reasoning deltas by default. Reasoning may be encrypted, provider-sensitive, or simply too noisy.
+- Do not print reasoning deltas as if they were final assistant output. If emitted, label them clearly as `thinking:` so the user can distinguish them from the answer.
 - Do not let sink errors break inference unless explicitly requested. A terminal write failure can be returned, but event publishing generally treats sinks as best-effort.
 
 ## 17. Open questions
 
 1. Should `--stream` default to true for both REPL and one-shot modes, or only for the REPL?
 2. Should the default streamed tool call banner include the tool call ID, or only the tool name?
-3. Should tool result previews be shown by default, or only under a `--stream-tool-details` flag?
-4. Should reasoning deltas ever be shown, and if so under what flag?
+3. Should tool result previews remain enabled by default, or should `--stream-tool-details=false` become the quieter default?
+4. Should thinking deltas use a different visual style, such as indentation or ANSI dimming, now that they stream by default?
 5. Should `turns.FprintfTurn` remain the default output for non-streaming one-shot mode so scripts have stable full-transcript output?
 
 ## 18. Summary for the intern

@@ -1,0 +1,41 @@
+# Live streaming details/thinking smoke test - 2026-04-29
+
+Command run in tmux:
+
+```bash
+go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-stream-details.sqlite --log-db-keep-temp --stream 2>&1 | tee /tmp/chat-stream-details-output.txt
+```
+
+Prompt:
+
+```text
+Use eval_js to list the first embedded help entry slug and title.
+```
+
+Observed stdout stream:
+
+```text
+[tool eval_js call call_n5MYJvKclYSquVh13cR3z4Mc]
+code:
+const rows = inputDB.query("SELECT slug, title FROM docs ORDER BY slug LIMIT 1"); return rows;
+[tool eval_js running call_n5MYJvKclYSquVh13cR3z4Mc]
+[tool eval_js done call_n5MYJvKclYSquVh13cR3z4Mc]
+result:
+{
+  "result": [
+    {
+      "slug": "chat-repl-user-guide",
+      "title": "chat REPL User Guide"
+    }
+  ]
+}
+
+assistant: - Slug: chat-repl-user-guide
+- Title: chat REPL User Guide
+```
+
+Notes:
+
+- Expanded `eval_js` code is printed by default through `--stream-tool-details=true`.
+- Expanded JSON tool result is printed by default through `--stream-tool-details=true`.
+- Thinking streaming is always enabled when providers emit `EventThinkingPartial` deltas, but this provider/profile did not emit visible thinking deltas in the captured pane. Unit tests cover the thinking sink behavior.

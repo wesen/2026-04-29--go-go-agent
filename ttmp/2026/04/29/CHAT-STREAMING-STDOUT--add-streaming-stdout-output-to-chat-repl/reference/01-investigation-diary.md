@@ -168,3 +168,61 @@ The key behavior change is that streaming mode no longer prints the entire final
 - Live DB: `/tmp/chat-stream.sqlite`.
 - Live tmux session: `chat-stream-smoke`.
 - Evidence file: `ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/sources/live-streaming-smoke-2026-04-29.txt`.
+
+## Step 3: Make thinking streaming unconditional and expand tool details by default
+
+The user clarified that thinking/reasoning deltas should not require a flag. I removed the `--stream-thinking` flag and made `EventThinkingPartial` rendering part of the default streaming sink behavior. Thinking output is still labelled separately as `thinking:` so it does not look like final assistant text.
+
+I also kept expanded tool details enabled by default through `--stream-tool-details=true`. For `eval_js`, the stream now expands the tool call code under a `code:` block and pretty-prints JSON tool results under a `result:` block. This makes the REPL useful as a live debugging surface rather than only a progress indicator.
+
+### Prompt Context
+
+**User prompt (verbatim):** "stream thinking is true by default."
+
+**Assistant interpretation:** Change the earlier opt-in thinking design so thinking deltas stream by default.
+
+**Inferred user intent:** The REPL should expose all live reasoning/thinking event output without requiring users to remember a separate flag.
+
+**Commit (code):** 72e5f0c11d3579c7da22e2fdc82ca7729425d5f3 — "Expand streaming tool details and thinking output"
+
+### What I did
+- Removed `StreamThinking` from `settings`.
+- Removed the `--stream-thinking` flag.
+- Removed `ShowThinking` from `stdoutStreamOptions`.
+- Changed `writeThinkingDelta` so thinking deltas are always rendered when emitted.
+- Updated tests so default sink behavior expects thinking output.
+- Updated design/changelog/evidence wording to remove the stale opt-in flag language.
+- Ran `go test ./... -count=1`.
+
+### Why
+- A flag is unnecessary if the intended default is always to show provider thinking events when they exist.
+- Keeping a separate `thinking:` prefix preserves the distinction between interim reasoning output and final assistant answer text.
+
+### What worked
+- The test suite passes after removing the flag.
+- `go run ./cmd/chat --help` no longer lists `--stream-thinking`.
+- Existing live evidence remains useful for expanded tool code/result output, even though that provider/profile did not emit thinking deltas in the capture.
+
+### What didn't work
+- N/A for this step.
+
+### What I learned
+- The code is simpler when thinking is treated as part of the default streaming sink behavior rather than another CLI option.
+
+### What was tricky to build
+- The documentation and evidence had stale references to `--stream-thinking`. I updated those references so the ticket does not describe a flag that no longer exists.
+
+### What warrants a second pair of eyes
+- Confirm whether `thinking:` should eventually be visually dimmed or indented to reduce confusion in terminals that support ANSI styling.
+
+### What should be done in the future
+- Run a provider/profile that actually emits `EventThinkingPartial` in plaintext to capture live evidence beyond the unit test.
+
+### Code review instructions
+- Review `cmd/chat/stream_stdout.go` around `writeThinkingDelta`.
+- Review `cmd/chat/main.go` to confirm the flag is gone.
+- Validate with `go test ./... -count=1`.
+
+### Technical details
+- Thinking event type: `*events.EventThinkingPartial` / `EventTypePartialThinking`.
+- Rendering prefix: `thinking:`.
