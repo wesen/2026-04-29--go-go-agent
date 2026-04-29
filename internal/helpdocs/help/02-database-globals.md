@@ -7,7 +7,7 @@ Topics:
   - sqlite
   - javascript
 Commands:
-  - chat
+  - chat run
 Flags: []
 IsTopLevel: true
 IsTemplate: false
@@ -16,9 +16,7 @@ SectionType: GeneralTopic
 Order: 20
 ---
 
-# Database Globals API
-
-The `chat` agent exposes two SQLite facades to JavaScript.
+The `chat` agent exposes two SQLite facades to JavaScript. These globals are available inside persistent `eval_js` REPL cells.
 
 ## inputDB
 
@@ -39,7 +37,7 @@ const rows = inputDB.query(`
   ORDER BY title
   LIMIT 10
 `, "%eval_js%");
-return rows;
+rows
 ```
 
 ## outputDB

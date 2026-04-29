@@ -18,6 +18,20 @@ RelatedFiles:
       Note: Help separation and inspect schema tests
     - Path: cmd/chat/main.go
       Note: Root command refactored into app shell plus run verb
+    - Path: internal/helpdocs/help/01-eval-js-api.md
+      Note: Updated eval_js help for REPL-cell semantics
+    - Path: internal/helpdocs/help/02-database-globals.md
+      Note: Updated database global examples for final-expression semantics
+    - Path: internal/helpdocs/help/03-chat-repl.md
+      Note: Updated REPL guide for chat run
+    - Path: internal/helpdocs/help/04-getting-started.md
+      Note: Embedded getting-started help page
+    - Path: internal/helpdocs/help/05-user-guide.md
+      Note: Embedded user guide help page
+    - Path: internal/helpdocs/help/06-internals.md
+      Note: Embedded internals help page
+    - Path: internal/helpdocs/help/07-developer-guide.md
+      Note: Embedded developer guide help page
     - Path: ttmp/2026/04/29/CHAT-CLI-VERBS--refactor-chat-cli-into-run-and-log-inspection-verbs/reference/01-implementation-diary.md
       Note: Implementation diary
     - Path: ttmp/2026/04/29/CHAT-CLI-VERBS--refactor-chat-cli-into-run-and-log-inspection-verbs/sources/inspect-smoke-2026-04-29.txt
@@ -28,6 +42,7 @@ LastUpdated: 2026-04-29T12:06:20.799395219-04:00
 WhatFor: ""
 WhenToUse: ""
 ---
+
 
 
 # Refactor chat CLI into run and log inspection verbs

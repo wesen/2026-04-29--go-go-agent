@@ -37,3 +37,15 @@ Converted run and inspect verbs from hand-written Cobra handlers to Glazed comma
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — Registers Glazed commands with root
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/run_command.go — Glazed WriterCommand for chat run
 
+
+## 2026-04-29
+
+Added textbook-style embedded Glazed help pages for getting-started, user-guide, internals, and developer-guide; updated older embedded help entries for chat run and REPL-cell eval_js semantics.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdocs/help/04-getting-started.md — Getting started help
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdocs/help/05-user-guide.md — User guide
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdocs/help/06-internals.md — Internals guide
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/helpdocs/help/07-developer-guide.md — Developer guide
+

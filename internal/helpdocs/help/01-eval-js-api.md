@@ -7,7 +7,7 @@ Topics:
   - eval-js
   - tools
 Commands:
-  - chat
+  - chat run
 Flags: []
 IsTopLevel: true
 IsTemplate: false
@@ -16,21 +16,19 @@ SectionType: GeneralTopic
 Order: 10
 ---
 
-# eval_js Tool API
-
-The `eval_js` tool executes JavaScript in the chat agent's constrained go-go-goja runtime.
+The `eval_js` tool executes JavaScript in the chat agent's constrained go-go-goja runtime. The code runs as a persistent REPL cell, so top-level declarations survive later tool calls and the final expression becomes the result.
 
 ## Input schema
 
 ```json
 {
-  "code": "return inputDB.query('SELECT slug, title FROM docs LIMIT 5')",
+  "code": "const rows = inputDB.query('SELECT slug, title FROM docs LIMIT 5'); rows",
   "input": {}
 }
 ```
 
-- `code` is JavaScript source. The runtime wraps it in an async function, so top-level `return` is supported.
-- `input` is an optional object passed to the script as the `input` parameter.
+- `code` is JavaScript source evaluated as a replsession cell. Use a final expression for the result; do not use top-level `return`.
+- `input` is an optional object exposed as the per-call `input` global.
 
 ## Output schema
 
@@ -43,11 +41,15 @@ The `eval_js` tool executes JavaScript in the chat agent's constrained go-go-goj
 }
 ```
 
-Return JSON-serializable values from scripts. Use `console.log(...)` for diagnostics.
+Make the final expression JSON-serializable when you want a structured tool result. Use `console.log(...)` for diagnostics. If the final expression is a function or `undefined`, the tool returns metadata such as `kind` and `preview` instead of silently dropping the value.
 
 ## Available globals
 
 - `inputDB`: read-only database facade containing embedded chat help entries.
 - `outputDB`: writable scratch database facade for derived notes and temporary tables.
+- `input`: per-call input object.
+- `globalThis`: canonical persistent global object.
+- `window`: alias of `globalThis` for browser-style snippets.
+- `global`: alias of `globalThis` for Node-style snippets.
 
 The main help table is `sections`. The app also creates a compatibility view named `docs`.

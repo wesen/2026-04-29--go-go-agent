@@ -7,7 +7,7 @@ Topics:
   - repl
   - profiles
 Commands:
-  - chat
+  - chat run
 Flags:
   - profile
   - profile-registries
@@ -19,14 +19,12 @@ SectionType: Tutorial
 Order: 30
 ---
 
-# chat REPL User Guide
-
-The `chat` binary starts a simple stdin/stdout REPL backed by Geppetto inference and Pinocchio profile resolution.
+The `chat run` command starts a stdin/stdout REPL backed by Geppetto inference and Pinocchio profile resolution.
 
 ## Basic usage
 
 ```bash
-chat --profile openai-fast
+chat run --profile openai-fast
 ```
 
 Type a message and press Enter. Use `:quit` to exit and `:reset` to clear the in-memory conversation.
