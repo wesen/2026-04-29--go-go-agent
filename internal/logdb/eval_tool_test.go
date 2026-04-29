@@ -79,6 +79,28 @@ func TestEvalToolReturnsReadOnlyErrorsAsPayload(t *testing.T) {
 	}
 }
 
+func TestEvalToolReturnsSerializationErrorsAsPayload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestLogDB(t, ctx)
+	defer db.Close()
+
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `const x = {}; x.self = x; return x;`})
+	if err != nil {
+		t.Fatalf("eval returned host error: %v", err)
+	}
+	if out.Error == "" {
+		t.Fatalf("expected serialization error payload")
+	}
+
+	var corrCount int
+	if err := db.ReplStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM eval_tool_calls WHERE error_text <> ''`).Scan(&corrCount); err != nil {
+		t.Fatalf("query error correlations: %v", err)
+	}
+	if corrCount != 1 {
+		t.Fatalf("expected one serialization error correlation row, got %d", corrCount)
+	}
+}
+
 func openTestLogDB(t *testing.T, ctx context.Context) *logdb.DB {
 	t.Helper()
 	input, err := helpdb.PrepareInputDB(ctx, helpdb.InputDBConfig{HelpFS: helpdocs.FS, HelpDir: helpdocs.Dir})
