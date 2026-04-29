@@ -45,3 +45,12 @@ Completed task 11 eval_js replapi behavior test coverage (commit a45a973a1ab1531
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool_test.go — Success/error eval_js persistence coverage
 
+
+## 2026-04-29
+
+Completed task 12 CLI flag and runner hook wiring; verified chat help lists log DB flags (commit 6ef38c4447f755fe2dff5ce31dddb04932b8f663).
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go — CLI flags
+

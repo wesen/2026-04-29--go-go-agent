@@ -221,3 +221,58 @@ This confirmed that the wrapper convention works for normal JSON-serializable re
 
 ### Technical details
 - Successful validation command: `go test ./internal/evaljs ./internal/logdb ./cmd/chat -count=1`.
+
+## Step 4: Confirm CLI lifecycle and runner hook wiring
+
+Task 12 was mostly implemented in the first code checkpoint, so I validated it explicitly before marking it complete. The chat command now constructs the `inputDB`/`outputDB` scope, builds a go-go-goja engine factory for replapi, opens the private log DB, injects `logDB.EvalTool()` into `evaljs.Build`, and passes `SessionID`, `SnapshotHook`, and `Persister` into every runner request.
+
+The user-facing CLI now exposes `--log-db`, `--log-db-strict`, `--no-log-db`, and `--log-db-keep-temp`. I verified the flags appear in `go run ./cmd/chat --help`.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 1)
+
+**Assistant interpretation:** Continue the ordered task list and record validation for the CLI/log lifecycle step.
+
+**Inferred user intent:** Ensure the command entrypoint is wired, not just the lower-level packages.
+
+**Commit (code):** 6ef38c4447f755fe2dff5ce31dddb04932b8f663 — "Add replapi-backed chat log database scaffolding"
+
+### What I did
+- Verified `cmd/chat/main.go` has log DB flags.
+- Verified `logdb.Open` is called with the eval runtime factory.
+- Verified `evaljs.Build` receives `evaljs.WithEvalTool(logDB.EvalTool())`.
+- Verified `runPrompt` passes `SessionID`, `SnapshotHook`, and `Persister` in `runner.StartRequest`.
+- Ran `go run ./cmd/chat --help | rg -- '--log-db|--no-log-db|--eval-timeout'`.
+- Checked docmgr task 12.
+
+### Why
+- Turn persistence depends on the runner hooks being present for every REPL prompt.
+- Eval persistence depends on the chat entrypoint constructing replapi before registering `eval_js`.
+
+### What worked
+- The help output lists all log DB-related flags.
+- The package tests still pass after the wiring changes.
+
+### What didn't work
+- N/A for this step.
+
+### What I learned
+- `--no-log-db` is visible, but currently errors because the replapi-backed design requires a private session store for `eval_js`; this was noted in Step 2 as needing review.
+
+### What was tricky to build
+- The order of initialization matters: `inputDB`/`outputDB` must exist first, then the engine factory, then `logdb.Open`, then `evaljs.Build` with the `EvalTool` from `logDB`.
+
+### What warrants a second pair of eyes
+- Review whether the temp DB should be deleted by default after `Close`, given that the private logging feature is mostly useful for inspection.
+- Review the `--no-log-db` semantics against the design and CLI help wording.
+
+### What should be done in the future
+- Run a live model smoke test with `--log-db /tmp/chat-log.sqlite` after task 13 coverage is complete.
+
+### Code review instructions
+- Review `cmd/chat/main.go`, especially `run`, `runPrompt`, and flag definitions.
+- Validate CLI flag visibility with `go run ./cmd/chat --help`.
+
+### Technical details
+- Validation command: `go run ./cmd/chat --help | rg -- '--log-db|--no-log-db|--eval-timeout'`.
