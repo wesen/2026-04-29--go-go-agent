@@ -11,13 +11,24 @@ Topics:
 DocType: index
 Intent: long-term
 Owners: []
-RelatedFiles: []
+RelatedFiles:
+    - Path: cmd/chat/inspect.go
+      Note: Read-only log DB inspection verbs
+    - Path: cmd/chat/inspect_test.go
+      Note: Help separation and inspect schema tests
+    - Path: cmd/chat/main.go
+      Note: Root command refactored into app shell plus run verb
+    - Path: ttmp/2026/04/29/CHAT-CLI-VERBS--refactor-chat-cli-into-run-and-log-inspection-verbs/reference/01-implementation-diary.md
+      Note: Implementation diary
+    - Path: ttmp/2026/04/29/CHAT-CLI-VERBS--refactor-chat-cli-into-run-and-log-inspection-verbs/sources/inspect-smoke-2026-04-29.txt
+      Note: Manual inspect smoke evidence
 ExternalSources: []
 Summary: ""
 LastUpdated: 2026-04-29T12:06:20.799395219-04:00
 WhatFor: ""
 WhenToUse: ""
 ---
+
 
 # Refactor chat CLI into run and log inspection verbs
 

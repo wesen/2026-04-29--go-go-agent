@@ -1,0 +1,55 @@
+# Inspect verbs smoke evidence - 2026-04-29
+
+Database used: `/tmp/chat-replcell.sqlite`
+
+## Help separation
+
+```bash
+go run ./cmd/chat --help
+```
+
+Observed: root help lists `run` and `inspect`, and does not list run-only `--stream`.
+
+```bash
+go run ./cmd/chat run --help
+```
+
+Observed: run help lists `--stream`, `--log-db`, profile flags, eval flags, and streaming flags, followed by global logging flags.
+
+## Inspect commands
+
+```bash
+go run ./cmd/chat inspect eval-calls --log-db /tmp/chat-replcell.sqlite --limit 3
+```
+
+Output excerpt:
+
+```text
+eval_tool_call_id	repl_cell_id	created	error_text	code	eval_output_json
+2	2	2026-04-29T11:52:43-04:00 (...)		const rows = inputDB.query("SELECT title FROM docs ORDER BY slug LIMIT 1"); titleOf(rows[0]);	{"result":"chat REPL User Guide"}
+1	1	2026-04-29T11:52:42-04:00 (...)		var titleOf = function(row) { return row.title; }	{}
+```
+
+```bash
+go run ./cmd/chat inspect repl-evals --log-db /tmp/chat-replcell.sqlite --limit 3
+```
+
+Observed: two replsession evaluations with cell IDs 1 and 2.
+
+```bash
+go run ./cmd/chat inspect turns --log-db /tmp/chat-replcell.sqlite --limit 3
+```
+
+Observed: one persisted final turn.
+
+```bash
+go run ./cmd/chat inspect blocks --log-db /tmp/chat-replcell.sqlite --limit 3
+```
+
+Observed: system, user, and reasoning blocks. The reasoning block payload contained encrypted provider reasoning content.
+
+```bash
+go run ./cmd/chat inspect turn-blocks --log-db /tmp/chat-replcell.sqlite --limit 3
+```
+
+Observed: final phase block memberships for the persisted turn.
