@@ -11,22 +11,29 @@ DocType: index
 Intent: long-term
 Owners: []
 RelatedFiles:
-    - Path: ../../../../../../corporate-headquarters/geppetto/pkg/inference/runner/run.go
+    - Path: /home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/run.go
       Note: Runner lifecycle to inspect for streaming events
-    - Path: ../../../../../../corporate-headquarters/geppetto/pkg/inference/runner/types.go
+    - Path: /home/manuel/code/wesen/corporate-headquarters/geppetto/pkg/inference/runner/types.go
       Note: Runner StartRequest event sink and streaming integration point
-    - Path: ../../../../../../obsidian-vault/Projects/2026/04/29/ARTICLE - From eval_js to Persistent Agent Runtime - Replsession Logging and Streaming Events.md
+    - Path: /home/manuel/code/wesen/obsidian-vault/Projects/2026/04/29/ARTICLE - From eval_js to Persistent Agent Runtime - Replsession Logging and Streaming Events.md
       Note: Obsidian follow-up article source
-    - Path: cmd/chat/main.go
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go
       Note: Current chat REPL stdout rendering and runner invocation
-    - Path: ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/reference/02-article-from-eval-js-to-persistent-agent-runtime.md
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/stream_stdout.go
+      Note: stdout streaming event sink implementation
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/stream_stdout_test.go
+      Note: streaming sink formatting tests
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/reference/02-article-from-eval-js-to-persistent-agent-runtime.md
       Note: Ticket-local copy of follow-up article
+    - Path: /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/sources/live-streaming-smoke-2026-04-29.txt
+      Note: live streaming smoke evidence
 ExternalSources: []
 Summary: ""
 LastUpdated: 2026-04-29T10:31:13.01104851-04:00
 WhatFor: ""
 WhenToUse: ""
 ---
+
 
 
 

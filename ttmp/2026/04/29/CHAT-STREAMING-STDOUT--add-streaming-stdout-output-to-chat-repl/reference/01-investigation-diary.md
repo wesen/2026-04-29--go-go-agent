@@ -89,3 +89,82 @@ system needed to understand what it is, with prose paragraphs and bullet
 ### Technical details
 - Main integration API: `runner.StartRequest.EventSinks []events.EventSink`.
 - Main sink interface: `PublishEvent(event events.Event) error`.
+
+## Step 2: Implement and validate streaming stdout
+
+I implemented the first version of streaming stdout for the chat REPL. The design uses Geppetto's existing `events.EventSink` mechanism: `cmd/chat` creates a small stdout sink and appends it to `runner.StartRequest.EventSinks` when streaming is enabled. The sink renders assistant deltas directly and prints compact tool progress banners for `eval_js` calls.
+
+The key behavior change is that streaming mode no longer prints the entire final turn after completion by default. That avoids duplicating the assistant answer: once as streamed deltas and once again as a full transcript. Developers who want the old full turn output can use `--stream=false`, or combine streaming with `--print-final-turn` for debugging.
+
+### Prompt Context
+
+**User prompt (verbatim):** "Go ahead, add tasks if you don't have them already."
+
+**Assistant interpretation:** Proceed from the design guide into implementation, adding any missing implementation tasks and then wiring streaming stdout.
+
+**Inferred user intent:** Move the streaming stdout ticket from design into working code while preserving the ticket diary/changelog process.
+
+**Commit (code):** b2ff88ec7575e5dadaea52dbe92b6e827bebb2c1 — "Add streaming stdout chat output"
+
+### What I did
+- Added tasks for implementing the stdout `EventSink` and wiring `--stream` / `--print-final-turn`.
+- Added `cmd/chat/stream_stdout.go` with `stdoutStreamSink`.
+- Handled these event types:
+  - `EventPartialCompletion`
+  - `EventToolCall`
+  - `EventToolCallExecute`
+  - `EventToolCallExecutionResult`
+  - `EventToolResult`
+  - `EventError`
+- Added `cmd/chat/stream_stdout_test.go` for formatting behavior.
+- Added settings and flags:
+  - `--stream`, default `true`
+  - `--print-final-turn`, default `false`
+- Changed `runPrompt` to attach the sink through `StartRequest.EventSinks` and to skip full final turn printing while streaming unless requested.
+- Ran `go test ./... -count=1`.
+- Ran a live tmux smoke test with `gpt-5-nano-low` and saved evidence under `sources/live-streaming-smoke-2026-04-29.txt`.
+
+### Why
+- Geppetto already emits partial/text/tool events; the chat command only needed a display sink.
+- Streaming output improves interactive UX during tool calls and long model responses.
+- The sink must be display-only so it does not interfere with final turn persistence or replsession eval persistence.
+
+### What worked
+- Unit tests passed for assistant deltas, compact tool summaries, optional verbose tool details, and error output.
+- The live tmux run showed tool banners:
+  - `[tool eval_js call ...]`
+  - `[tool eval_js running ...]`
+  - `[tool eval_js done ...]`
+- The assistant answer appeared through the streaming sink.
+- The final turn was not printed a second time in streaming mode.
+- The private DB still contained one final turn, one eval row, and one eval correlation row.
+
+### What didn't work
+- N/A for this implementation step.
+
+### What I learned
+- The current provider/tool-loop path emits enough events for a useful first streaming UX without modifying Geppetto.
+- Both provider-level `tool-call` and local `tool-call-execute` events are visible, so the default UX shows both a call banner and a running banner.
+
+### What was tricky to build
+- The main formatting issue is line ownership. Assistant deltas should stream inline, but tool banners must start on clean lines. The sink keeps a small amount of state (`assistantStarted`, `lastWasDelta`) and uses a mutex to protect output formatting.
+- Avoiding duplicate final output required changing `runPrompt`, not the sink. The sink prints events; `runPrompt` decides whether to render the final turn.
+
+### What warrants a second pair of eyes
+- Decide whether default `--stream=true` is acceptable for one-shot invocations, or whether one-shot mode should default to non-streaming for script stability.
+- Decide whether showing both `[tool call]` and `[tool running]` is too verbose.
+- Decide whether to add flags for `ShowToolArgs` and `ShowToolResults`; the sink supports these options internally but the CLI does not expose them yet.
+
+### What should be done in the future
+- Add a live smoke test with `--print-final-turn` to verify the explicit debug duplication mode.
+- Consider an opt-in `--stream-tool-details` flag for arguments/results previews.
+
+### Code review instructions
+- Start with `cmd/chat/stream_stdout.go`.
+- Then review `cmd/chat/main.go` around `runPrompt` and flag definitions.
+- Validate with `go test ./... -count=1` and review `sources/live-streaming-smoke-2026-04-29.txt`.
+
+### Technical details
+- Live DB: `/tmp/chat-stream.sqlite`.
+- Live tmux session: `chat-stream-smoke`.
+- Evidence file: `ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/sources/live-streaming-smoke-2026-04-29.txt`.

@@ -1,0 +1,50 @@
+# Live streaming stdout smoke test - 2026-04-29
+
+Command run in tmux:
+
+```bash
+go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-stream.sqlite --log-db-keep-temp --stream 2>&1 | tee /tmp/chat-stream-output.txt
+```
+
+Prompt:
+
+```text
+Use eval_js to list the first embedded help entry slug and title.
+```
+
+Observed stdout stream:
+
+```text
+chat REPL. Type :help for commands, :quit to exit.
+> Use eval_js to list the first embedded help entry slug and title.
+
+[tool eval_js call call_UkM1CdVnX9YZ4zrv17mNTyKM]
+[tool eval_js running call_UkM1CdVnX9YZ4zrv17mNTyKM]
+[tool eval_js done call_UkM1CdVnX9YZ4zrv17mNTyKM]
+
+assistant: First embedded help entry (by title order): slug = database-globals-api, title = Database Globals API
+> :quit
+```
+
+Private DB verification:
+
+```text
+--- counts
+turns|1
+memberships|6
+evaluations|1
+eval_tool_calls|1
+
+--- phases
+final|6
+
+--- corr
+1|{"result":[{"slug":"database-globals-api","title":"Database Globals API"}]}|
+```
+
+Conclusion:
+
+- Streaming stdout shows compact tool progress banners.
+- Assistant output streams through the stdout sink.
+- The final full turn is not duplicated by default when `--stream` is enabled.
+- Private DB final turn and eval persistence still work.
