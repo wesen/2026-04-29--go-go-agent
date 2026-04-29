@@ -133,8 +133,10 @@ func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, evalErr
 		return out
 	}
 	var envelope struct {
-		Result any    `json:"result"`
-		Error  string `json:"error,omitempty"`
+		Result  any    `json:"result"`
+		Error   string `json:"error,omitempty"`
+		Kind    string `json:"kind,omitempty"`
+		Preview string `json:"preview,omitempty"`
 	}
 	if decodeErr := json.Unmarshal([]byte(resultJSON), &envelope); decodeErr != nil {
 		out.Error = "eval_js result was not valid JSON: " + decodeErr.Error()
@@ -142,6 +144,10 @@ func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, evalErr
 	}
 	if envelope.Error != "" {
 		out.Error = envelope.Error
+		return out
+	}
+	if envelope.Kind != "" && envelope.Result == nil {
+		out.Result = map[string]any{"kind": envelope.Kind, "preview": envelope.Preview}
 		return out
 	}
 	out.Result = envelope.Result

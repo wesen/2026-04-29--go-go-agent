@@ -124,6 +124,30 @@ func TestEvalToolSetsPerCallInputAndGlobalAliases(t *testing.T) {
 	}
 }
 
+func TestEvalToolReturnsMetadataForFunctionFinalExpression(t *testing.T) {
+	ctx := context.Background()
+	db := openTestLogDB(t, ctx)
+	defer db.Close()
+
+	out, err := db.EvalTool().Eval(ctx, scopedjs.EvalInput{Code: `function helper() { return 1; } helper`})
+	if err != nil {
+		t.Fatalf("eval returned host error: %v", err)
+	}
+	if out.Error != "" {
+		t.Fatalf("eval returned error payload: %s", out.Error)
+	}
+	m, ok := out.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata map result, got %T %#v", out.Result, out.Result)
+	}
+	if got := m["kind"]; got != "function" {
+		t.Fatalf("expected kind=function, got %#v", got)
+	}
+	if got := m["preview"]; got == "" {
+		t.Fatalf("expected preview, got %#v", got)
+	}
+}
+
 func TestEvalToolReturnsTopLevelReturnErrorsAsPayload(t *testing.T) {
 	ctx := context.Background()
 	db := openTestLogDB(t, ctx)
