@@ -11,7 +11,9 @@ import (
 
 	"github.com/go-go-golems/geppetto/pkg/inference/runner"
 	"github.com/go-go-golems/geppetto/pkg/turns"
+	"github.com/go-go-golems/glazed/pkg/cli"
 	"github.com/go-go-golems/glazed/pkg/cmds/logging"
+	"github.com/go-go-golems/glazed/pkg/cmds/schema"
 	"github.com/go-go-golems/glazed/pkg/help"
 	help_cmd "github.com/go-go-golems/glazed/pkg/help/cmd"
 	"github.com/go-go-golems/go-go-agent/internal/evaljs"
@@ -39,13 +41,16 @@ type settings struct {
 	PrintFinalTurn        bool
 	StreamToolDetails     bool
 	StreamMaxPreviewChars int
+	Prompt                []string
 }
 
 func main() {
 	ctx := context.Background()
 	cmd := newRootCommand(ctx)
-	cmd.AddCommand(newRunCommand(ctx))
-	cmd.AddCommand(newInspectCommand())
+	if err := registerGlazedCommands(ctx, cmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -83,42 +88,26 @@ Use "chat run" to start the REPL or execute a one-shot prompt. Use
 	}
 }
 
-func newRunCommand(ctx context.Context) *cobra.Command {
-	var s settings
-	cmd := &cobra.Command{
-		Use:   "run [prompt...]",
-		Short: "Run the chat REPL or a one-shot prompt",
-		Long: `Run starts the chat REPL when no prompt is provided, or executes a
-one-shot prompt when positional arguments are given.
-
-Examples:
-  chat run --profile gpt-5-nano-low
-  chat run --log-db /tmp/chat.sqlite "List the embedded help topics"`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(ctx, s, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
-		},
+func registerGlazedCommands(ctx context.Context, root *cobra.Command) error {
+	runCmd, err := NewRunCommand(ctx)
+	if err != nil {
+		return err
 	}
-	addRunFlags(cmd, &s)
-	return cmd
-}
+	cobraRun, err := cli.BuildCobraCommand(runCmd,
+		cli.WithParserConfig(cli.CobraParserConfig{ShortHelpSections: []string{schema.DefaultSlug}, MiddlewaresFunc: cli.CobraCommandDefaultMiddlewares, SkipCommandSettingsSection: true}),
+	)
+	if err != nil {
+		return err
+	}
+	root.AddCommand(cobraRun)
 
-func addRunFlags(cmd *cobra.Command, s *settings) {
-	cmd.Flags().StringVar(&s.ConfigFile, "config-file", "", "Explicit Pinocchio config/profile file")
-	cmd.Flags().StringVar(&s.Profile, "profile", "", "Pinocchio profile to load")
-	cmd.Flags().StringArrayVar(&s.ProfileRegistries, "profile-registries", nil, "Profile registry source (repeatable)")
-	cmd.Flags().StringVar(&s.InputDBPath, "input-db", "", "Optional path for materialized embedded help input DB")
-	cmd.Flags().StringVar(&s.OutputDBPath, "output-db", "", "Optional path for writable scratch output DB")
-	cmd.Flags().DurationVar(&s.EvalTimeout, "eval-timeout", 5*time.Second, "eval_js execution timeout")
-	cmd.Flags().IntVar(&s.MaxOutputChars, "max-output-chars", 16000, "maximum string/console output characters returned by eval_js")
-	cmd.Flags().StringVar(&s.LogDBPath, "log-db", "", "Path for the private host-only logging DB (defaults to a temp SQLite DB)")
-	cmd.Flags().BoolVar(&s.LogDBStrict, "log-db-strict", false, "Fail the chat run if private logging persistence fails")
-	cmd.Flags().BoolVar(&s.NoLogDB, "no-log-db", false, "Disable private DB logging and eval_js persistence")
-	cmd.Flags().BoolVar(&s.LogDBKeepTemp, "log-db-keep-temp", false, "Keep the default temporary log DB after exit")
-	cmd.Flags().BoolVar(&s.LogDBTurnSnapshots, "log-db-turn-snapshots", false, "Persist intermediate turn snapshots in addition to final turns")
-	cmd.Flags().BoolVar(&s.StreamStdout, "stream", true, "Stream assistant/tool/thinking progress to stdout while inference runs")
-	cmd.Flags().BoolVar(&s.PrintFinalTurn, "print-final-turn", false, "Print the full final turn after completion, even when streaming")
-	cmd.Flags().BoolVar(&s.StreamToolDetails, "stream-tool-details", true, "Print expanded streaming tool call code and tool results")
-	cmd.Flags().IntVar(&s.StreamMaxPreviewChars, "stream-max-preview-chars", 4000, "Maximum characters for streamed tool args/results previews")
+	inspectCommands, err := NewInspectCommands()
+	if err != nil {
+		return err
+	}
+	return cli.AddCommandsToRootCommand(root, inspectCommands, nil,
+		cli.WithParserConfig(cli.CobraParserConfig{ShortHelpSections: []string{schema.DefaultSlug}, MiddlewaresFunc: cli.CobraCommandDefaultMiddlewares, SkipCommandSettingsSection: true}),
+	)
 }
 
 func run(ctx context.Context, s settings, args []string, in io.Reader, out io.Writer, errOut io.Writer) error {

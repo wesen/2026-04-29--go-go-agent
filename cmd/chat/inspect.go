@@ -3,242 +3,176 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/go-go-golems/glazed/pkg/cmds"
+	"github.com/go-go-golems/glazed/pkg/cmds/fields"
+	"github.com/go-go-golems/glazed/pkg/cmds/schema"
+	"github.com/go-go-golems/glazed/pkg/cmds/values"
+	"github.com/go-go-golems/glazed/pkg/middlewares"
+	glazedsettings "github.com/go-go-golems/glazed/pkg/settings"
+	"github.com/go-go-golems/glazed/pkg/types"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/spf13/cobra"
 )
 
 type inspectSettings struct {
-	LogDBPath string
-	Limit     int
-	JSON      bool
-	SessionID string
-	TurnID    string
-	Source    bool
+	LogDBPath string `glazed:"log-db"`
+	Limit     int    `glazed:"limit"`
+	SessionID string `glazed:"session-id"`
+	TurnID    string `glazed:"turn-id"`
+	Source    bool   `glazed:"source"`
 }
 
 type row map[string]any
 
-func newInspectCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "inspect",
-		Short: "Inspect private chat log databases",
-		Long: `Inspect reads a chat --log-db SQLite database after a run.
-
-All inspect commands are read-only and support --json for machine-readable output.`,
-	}
-	cmd.AddCommand(newInspectSessionsCommand())
-	cmd.AddCommand(newInspectEvalCallsCommand())
-	cmd.AddCommand(newInspectReplEvalsCommand())
-	cmd.AddCommand(newInspectBindingsCommand())
-	cmd.AddCommand(newInspectTurnsCommand())
-	cmd.AddCommand(newInspectBlocksCommand())
-	cmd.AddCommand(newInspectTurnBlocksCommand())
-	cmd.AddCommand(newInspectSchemaCommand())
-	return cmd
+type InspectQueryCommand struct {
+	*cmds.CommandDescription
+	kind string
 }
 
-func newInspectSessionsCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "sessions",
-		Short: "List chat log sessions",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT chat_session_id, eval_session_id, conv_id, profile, started_at_ms, strict, log_schema_version FROM chat_log_sessions ORDER BY started_at_ms DESC`)
-				if err != nil {
-					return err
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"chat_session_id", "eval_session_id", "conv_id", "profile", "started", "strict", "schema"}, rows)
-			})
-		},
+var _ cmds.GlazeCommand = &InspectQueryCommand{}
+
+func NewInspectCommands() ([]cmds.Command, error) {
+	defs := []struct {
+		name  string
+		short string
+		kind  string
+		flags []*fields.Definition
+	}{
+		{"sessions", "List chat log sessions", "sessions", nil},
+		{"eval-calls", "List eval_js tool call correlation rows", "eval-calls", []*fields.Definition{limitField()}},
+		{"repl-evals", "List replsession evaluation cells", "repl-evals", []*fields.Definition{limitField(), fields.New("source", fields.TypeBool, fields.WithDefault(false), fields.WithHelp("Print full raw source instead of a preview"))}},
+		{"bindings", "List persistent JavaScript bindings", "bindings", []*fields.Definition{fields.New("session-id", fields.TypeString, fields.WithDefault(""), fields.WithHelp("Filter by repl session id"))}},
+		{"turns", "List persisted chat turns", "turns", []*fields.Definition{limitField()}},
+		{"blocks", "List unique persisted chat blocks", "blocks", []*fields.Definition{limitField()}},
+		{"turn-blocks", "List turn/block membership rows", "turn-blocks", []*fields.Definition{limitField(), fields.New("turn-id", fields.TypeString, fields.WithDefault(""), fields.WithHelp("Filter by turn id"))}},
+		{"schema", "List SQLite tables and row counts", "schema", nil},
 	}
-	addInspectCommonFlags(cmd, &s, false)
-	return cmd
+	out := make([]cmds.Command, 0, len(defs))
+	for _, def := range defs {
+		cmd, err := newInspectQueryCommand(def.name, def.short, def.kind, def.flags...)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cmd)
+	}
+	return out, nil
 }
 
-func newInspectEvalCallsCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "eval-calls",
-		Short: "List eval_js tool call correlation rows",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT eval_tool_call_id, repl_cell_id, created_at_ms, error_text, code, eval_output_json FROM eval_tool_calls ORDER BY created_at_ms DESC LIMIT ?`, s.Limit)
-				if err != nil {
-					return err
-				}
-				for _, r := range rows {
-					r["code"] = preview(fmt.Sprint(r["code"]), 120)
-					r["eval_output_json"] = preview(fmt.Sprint(r["eval_output_json"]), 120)
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"eval_tool_call_id", "repl_cell_id", "created", "error_text", "code", "eval_output_json"}, rows)
-			})
-		},
-	}
-	addInspectCommonFlags(cmd, &s, true)
-	return cmd
+func limitField() *fields.Definition {
+	return fields.New("limit", fields.TypeInteger, fields.WithDefault(20), fields.WithHelp("Maximum rows to print"))
 }
 
-func newInspectReplEvalsCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "repl-evals",
-		Short: "List replsession evaluation cells",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT evaluation_id, session_id, cell_id, created_at, ok, error_text, raw_source, result_json FROM evaluations ORDER BY created_at DESC LIMIT ?`, s.Limit)
-				if err != nil {
-					return err
-				}
-				for _, r := range rows {
-					if !s.Source {
-						r["raw_source"] = preview(fmt.Sprint(r["raw_source"]), 120)
-					}
-					r["result_json"] = preview(fmt.Sprint(r["result_json"]), 120)
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"evaluation_id", "session_id", "cell_id", "created_at", "ok", "error_text", "raw_source", "result_json"}, rows)
-			})
-		},
+func newInspectQueryCommand(name, short, kind string, extraFlags ...*fields.Definition) (*InspectQueryCommand, error) {
+	glazedSection, err := glazedsettings.NewGlazedSchema()
+	if err != nil {
+		return nil, err
 	}
-	addInspectCommonFlags(cmd, &s, true)
-	cmd.Flags().BoolVar(&s.Source, "source", false, "Print full raw source instead of a preview")
-	return cmd
+	flags := []*fields.Definition{
+		fields.New("log-db", fields.TypeString, fields.WithDefault(""), fields.WithHelp("Path to private chat log SQLite DB"), fields.WithRequired(true)),
+	}
+	flags = append(flags, extraFlags...)
+	desc := cmds.NewCommandDescription(
+		name,
+		cmds.WithParents("inspect"),
+		cmds.WithShort(short),
+		cmds.WithLong(fmt.Sprintf(`%s.
+
+Examples:
+  chat inspect %s --log-db /tmp/chat.sqlite
+  chat inspect %s --log-db /tmp/chat.sqlite --output json`, short, name, name)),
+		cmds.WithFlags(flags...),
+		cmds.WithSections(glazedSection),
+	)
+	return &InspectQueryCommand{CommandDescription: desc, kind: kind}, nil
 }
 
-func newInspectBindingsCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "bindings",
-		Short: "List persistent JavaScript bindings",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT b.session_id, b.name, b.latest_cell_id, COALESCE(bv.runtime_type, '') AS runtime_type, COALESCE(bv.display_value, '') AS display_value FROM bindings b LEFT JOIN binding_versions bv ON bv.binding_id = b.binding_id AND bv.cell_id = b.latest_cell_id WHERE (? = '' OR b.session_id = ?) ORDER BY b.session_id, b.name`, s.SessionID, s.SessionID)
-				if err != nil {
-					return err
-				}
-				for _, r := range rows {
-					r["display_value"] = preview(fmt.Sprint(r["display_value"]), 120)
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"session_id", "name", "latest_cell_id", "runtime_type", "display_value"}, rows)
-			})
-		},
+func (c *InspectQueryCommand) RunIntoGlazeProcessor(ctx context.Context, vals *values.Values, gp middlewares.Processor) error {
+	s := &inspectSettings{Limit: 20}
+	if err := vals.DecodeSectionInto(schema.DefaultSlug, s); err != nil {
+		return err
 	}
-	addInspectCommonFlags(cmd, &s, false)
-	cmd.Flags().StringVar(&s.SessionID, "session-id", "", "Filter by repl session id")
-	return cmd
+	return withInspectDB(ctx, *s, func(db *sql.DB) error {
+		rows, headers, err := c.inspectRows(ctx, db, *s)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if err := gp.AddRow(ctx, rowToGlazedRow(headers, r)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-func newInspectTurnsCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "turns",
-		Short: "List persisted chat turns",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT conv_id, session_id, turn_id, turn_created_at_ms, runtime_key, inference_id, updated_at_ms FROM turns ORDER BY updated_at_ms DESC LIMIT ?`, s.Limit)
-				if err != nil {
-					return err
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"conv_id", "session_id", "turn_id", "created", "runtime_key", "inference_id", "updated"}, rows)
-			})
-		},
+func (c *InspectQueryCommand) inspectRows(ctx context.Context, db *sql.DB, s inspectSettings) ([]row, []string, error) {
+	switch c.kind {
+	case "sessions":
+		rows, err := queryRows(ctx, db, `SELECT chat_session_id, eval_session_id, conv_id, profile, started_at_ms, strict, log_schema_version FROM chat_log_sessions ORDER BY started_at_ms DESC`)
+		return rows, []string{"chat_session_id", "eval_session_id", "conv_id", "profile", "started_at_ms", "strict", "log_schema_version"}, err
+	case "eval-calls":
+		rows, err := queryRows(ctx, db, `SELECT eval_tool_call_id, repl_cell_id, created_at_ms, error_text, code, eval_output_json FROM eval_tool_calls ORDER BY created_at_ms DESC LIMIT ?`, s.Limit)
+		for _, r := range rows {
+			r["code"] = preview(fmt.Sprint(r["code"]), 120)
+			r["eval_output_json"] = preview(fmt.Sprint(r["eval_output_json"]), 120)
+		}
+		return rows, []string{"eval_tool_call_id", "repl_cell_id", "created_at_ms", "error_text", "code", "eval_output_json"}, err
+	case "repl-evals":
+		rows, err := queryRows(ctx, db, `SELECT evaluation_id, session_id, cell_id, created_at, ok, error_text, raw_source, result_json FROM evaluations ORDER BY created_at DESC LIMIT ?`, s.Limit)
+		for _, r := range rows {
+			if !s.Source {
+				r["raw_source"] = preview(fmt.Sprint(r["raw_source"]), 120)
+			}
+			r["result_json"] = preview(fmt.Sprint(r["result_json"]), 120)
+		}
+		return rows, []string{"evaluation_id", "session_id", "cell_id", "created_at", "ok", "error_text", "raw_source", "result_json"}, err
+	case "bindings":
+		rows, err := queryRows(ctx, db, `SELECT b.session_id, b.name, b.latest_cell_id, COALESCE(bv.runtime_type, '') AS runtime_type, COALESCE(bv.display_value, '') AS display_value FROM bindings b LEFT JOIN binding_versions bv ON bv.binding_id = b.binding_id AND bv.cell_id = b.latest_cell_id WHERE (? = '' OR b.session_id = ?) ORDER BY b.session_id, b.name`, s.SessionID, s.SessionID)
+		for _, r := range rows {
+			r["display_value"] = preview(fmt.Sprint(r["display_value"]), 120)
+		}
+		return rows, []string{"session_id", "name", "latest_cell_id", "runtime_type", "display_value"}, err
+	case "turns":
+		rows, err := queryRows(ctx, db, `SELECT conv_id, session_id, turn_id, turn_created_at_ms, runtime_key, inference_id, updated_at_ms FROM turns ORDER BY updated_at_ms DESC LIMIT ?`, s.Limit)
+		return rows, []string{"conv_id", "session_id", "turn_id", "turn_created_at_ms", "runtime_key", "inference_id", "updated_at_ms"}, err
+	case "blocks":
+		rows, err := queryRows(ctx, db, `SELECT block_id, kind, role, first_seen_at_ms, payload_json FROM blocks ORDER BY first_seen_at_ms DESC LIMIT ?`, s.Limit)
+		for _, r := range rows {
+			r["payload_json"] = preview(fmt.Sprint(r["payload_json"]), 160)
+		}
+		return rows, []string{"block_id", "kind", "role", "first_seen_at_ms", "payload_json"}, err
+	case "turn-blocks":
+		rows, err := queryRows(ctx, db, `SELECT conv_id, session_id, turn_id, phase, snapshot_created_at_ms, ordinal, block_id, content_hash FROM turn_block_membership WHERE (? = '' OR turn_id = ?) ORDER BY snapshot_created_at_ms DESC, ordinal ASC LIMIT ?`, s.TurnID, s.TurnID, s.Limit)
+		return rows, []string{"conv_id", "session_id", "turn_id", "phase", "snapshot_created_at_ms", "ordinal", "block_id", "content_hash"}, err
+	case "schema":
+		tables, err := tableNames(ctx, db)
+		if err != nil {
+			return nil, nil, err
+		}
+		out := make([]row, 0, len(tables))
+		for _, table := range tables {
+			count, err := countTable(ctx, db, table)
+			if err != nil {
+				return nil, nil, err
+			}
+			out = append(out, row{"table": table, "rows": count})
+		}
+		return out, []string{"table", "rows"}, nil
+	default:
+		return nil, nil, fmt.Errorf("unknown inspect kind %q", c.kind)
 	}
-	addInspectCommonFlags(cmd, &s, true)
-	return cmd
 }
 
-func newInspectBlocksCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "blocks",
-		Short: "List unique persisted chat blocks",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT block_id, kind, role, first_seen_at_ms, payload_json FROM blocks ORDER BY first_seen_at_ms DESC LIMIT ?`, s.Limit)
-				if err != nil {
-					return err
-				}
-				for _, r := range rows {
-					r["payload_json"] = preview(fmt.Sprint(r["payload_json"]), 160)
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"block_id", "kind", "role", "first_seen", "payload_json"}, rows)
-			})
-		},
+func rowToGlazedRow(headers []string, r row) types.Row {
+	pairs := make([]types.MapRowPair, 0, len(headers))
+	for _, h := range headers {
+		pairs = append(pairs, types.MRP(h, r[h]))
 	}
-	addInspectCommonFlags(cmd, &s, true)
-	return cmd
-}
-
-func newInspectTurnBlocksCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "turn-blocks",
-		Short: "List turn/block membership rows",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				rows, err := queryRows(cmd.Context(), db, `SELECT conv_id, session_id, turn_id, phase, snapshot_created_at_ms, ordinal, block_id, content_hash FROM turn_block_membership WHERE (? = '' OR turn_id = ?) ORDER BY snapshot_created_at_ms DESC, ordinal ASC LIMIT ?`, s.TurnID, s.TurnID, s.Limit)
-				if err != nil {
-					return err
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"conv_id", "session_id", "turn_id", "phase", "snapshot", "ordinal", "block_id", "content_hash"}, rows)
-			})
-		},
-	}
-	addInspectCommonFlags(cmd, &s, true)
-	cmd.Flags().StringVar(&s.TurnID, "turn-id", "", "Filter by turn id")
-	return cmd
-}
-
-func newInspectSchemaCommand() *cobra.Command {
-	var s inspectSettings
-	cmd := &cobra.Command{
-		Use:   "schema",
-		Short: "List SQLite tables and row counts",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			return withInspectDB(cmd.Context(), s, func(db *sql.DB) error {
-				tables, err := tableNames(cmd.Context(), db)
-				if err != nil {
-					return err
-				}
-				out := make([]row, 0, len(tables))
-				for _, table := range tables {
-					count, err := countTable(cmd.Context(), db, table)
-					if err != nil {
-						return err
-					}
-					out = append(out, row{"table": table, "rows": count})
-				}
-				return printInspect(cmd.OutOrStdout(), s.JSON, []string{"table", "rows"}, out)
-			})
-		},
-	}
-	addInspectCommonFlags(cmd, &s, false)
-	return cmd
-}
-
-func addInspectCommonFlags(cmd *cobra.Command, s *inspectSettings, withLimit bool) {
-	cmd.Flags().StringVar(&s.LogDBPath, "log-db", "", "Path to private chat log SQLite DB")
-	cmd.Flags().BoolVar(&s.JSON, "json", false, "Print JSON output")
-	if withLimit {
-		cmd.Flags().IntVar(&s.Limit, "limit", 20, "Maximum rows to print")
-	} else {
-		s.Limit = 0
-	}
+	return types.NewRow(pairs...)
 }
 
 func withInspectDB(ctx context.Context, s inspectSettings, fn func(*sql.DB) error) error {
@@ -311,42 +245,6 @@ func countTable(ctx context.Context, db *sql.DB, table string) (int64, error) {
 		return 0, err
 	}
 	return count, nil
-}
-
-func printInspect(out io.Writer, asJSON bool, headers []string, rows []row) error {
-	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(rows)
-	}
-	fmt.Fprintln(out, strings.Join(headers, "\t"))
-	for _, r := range rows {
-		vals := make([]string, len(headers))
-		for i, h := range headers {
-			vals[i] = fmt.Sprint(r[columnName(h)])
-		}
-		fmt.Fprintln(out, strings.Join(vals, "\t"))
-	}
-	return nil
-}
-
-func columnName(header string) string {
-	switch header {
-	case "created":
-		return "created_at_ms"
-	case "started":
-		return "started_at_ms"
-	case "updated":
-		return "updated_at_ms"
-	case "schema":
-		return "log_schema_version"
-	case "first_seen":
-		return "first_seen_at_ms"
-	case "snapshot":
-		return "snapshot_created_at_ms"
-	default:
-		return header
-	}
 }
 
 func normalizeDBValue(v any) any {

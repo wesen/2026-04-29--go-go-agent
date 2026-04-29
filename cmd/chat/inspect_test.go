@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-go-golems/glazed/pkg/cmds/logging"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/spf13/cobra"
 )
 
 func TestRootHelpSeparatesRunFlags(t *testing.T) {
-	cmd := newRootCommand(context.Background())
-	cmd.AddCommand(newRunCommand(context.Background()))
-	cmd.AddCommand(newInspectCommand())
+	cmd := newTestRootCommand(t)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -33,8 +33,7 @@ func TestRootHelpSeparatesRunFlags(t *testing.T) {
 }
 
 func TestRunHelpContainsRunFlags(t *testing.T) {
-	cmd := newRootCommand(context.Background())
-	cmd.AddCommand(newRunCommand(context.Background()))
+	cmd := newTestRootCommand(t)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -47,6 +46,18 @@ func TestRunHelpContainsRunFlags(t *testing.T) {
 	if !strings.Contains(got, "--stream") || !strings.Contains(got, "--log-db") {
 		t.Fatalf("run help should include run flags, got:\n%s", got)
 	}
+}
+
+func newTestRootCommand(t *testing.T) *cobra.Command {
+	t.Helper()
+	cmd := newRootCommand(context.Background())
+	if err := registerGlazedCommands(context.Background(), cmd); err != nil {
+		t.Fatalf("register commands: %v", err)
+	}
+	if err := logging.AddLoggingSectionToRootCommand(cmd, "chat"); err != nil {
+		t.Fatalf("add logging section: %v", err)
+	}
+	return cmd
 }
 
 func TestInspectSchemaCommandPrintsTables(t *testing.T) {
@@ -62,17 +73,20 @@ func TestInspectSchemaCommandPrintsTables(t *testing.T) {
 		t.Fatalf("close db: %v", err)
 	}
 
-	cmd := newInspectSchemaCommand()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"--log-db", path})
-
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("execute inspect schema: %v", err)
+	cmd, err := newInspectQueryCommand("schema", "List SQLite tables and row counts", "schema")
+	if err != nil {
+		t.Fatalf("new inspect command: %v", err)
 	}
-	got := out.String()
-	if !strings.Contains(got, "chat_log_sessions") || !strings.Contains(got, "1") {
-		t.Fatalf("expected schema output with table count, got:\n%s", got)
+	if err := withInspectDB(context.Background(), inspectSettings{LogDBPath: path}, func(db *sql.DB) error {
+		rows, _, err := cmd.inspectRows(context.Background(), db, inspectSettings{LogDBPath: path})
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 || rows[0]["table"] != "chat_log_sessions" || rows[0]["rows"] != int64(1) {
+			t.Fatalf("expected schema row count, got %#v", rows)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect schema: %v", err)
 	}
 }
