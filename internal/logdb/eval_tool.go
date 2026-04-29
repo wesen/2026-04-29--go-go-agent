@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
+	"github.com/dop251/goja"
 	"github.com/go-go-golems/geppetto/pkg/inference/tools/scopedjs"
+	gojengine "github.com/go-go-golems/go-go-goja/engine"
 	"github.com/go-go-golems/go-go-goja/pkg/replsession"
 )
 
@@ -46,7 +47,8 @@ func (e *EvalTool) Eval(ctx context.Context, in scopedjs.EvalInput) (scopedjs.Ev
 	}
 
 	resp, evalErr := e.DB.ReplApp.Evaluate(ctx, e.DB.EvalSessionID, source)
-	out := convertReplResponseToEvalOutput(resp, evalErr, started)
+	resultJSON, resultErr := e.readLastResultJSON(ctx, evalErr)
+	out := convertReplResponseToEvalOutput(resp, evalErr, resultJSON, resultErr, started)
 
 	corr := EvalCorrelation{
 		ToolCallID:     "",
@@ -80,11 +82,28 @@ const __chat_eval_input = %s;
 const __chat_eval_result = await (async function(input) {
 %s
 })(__chat_eval_input);
-JSON.stringify({ result: __chat_eval_result });
+globalThis.__chat_eval_last_json = JSON.stringify({ result: __chat_eval_result });
+globalThis.__chat_eval_last_json;
 `, inputJSON, in.Code), nil
 }
 
-func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, err error, started time.Time) scopedjs.EvalOutput {
+func (e *EvalTool) readLastResultJSON(ctx context.Context, evalErr error) (string, error) {
+	if evalErr != nil {
+		return "", nil
+	}
+	var resultJSON string
+	err := e.DB.ReplApp.WithRuntime(ctx, e.DB.EvalSessionID, func(rt *gojengine.Runtime) error {
+		v := rt.VM.Get("__chat_eval_last_json")
+		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+			return fmt.Errorf("eval_js did not set __chat_eval_last_json")
+		}
+		resultJSON = v.String()
+		return nil
+	})
+	return resultJSON, err
+}
+
+func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, evalErr error, resultJSON string, resultErr error, started time.Time) scopedjs.EvalOutput {
 	out := scopedjs.EvalOutput{DurationMs: time.Since(started).Milliseconds()}
 	if resp != nil && resp.Cell != nil {
 		out.DurationMs = resp.Cell.Execution.DurationMS
@@ -94,25 +113,22 @@ func convertReplResponseToEvalOutput(resp *replsession.EvaluateResponse, err err
 			return out
 		}
 	}
-	if err != nil {
-		out.Error = err.Error()
+	if evalErr != nil {
+		out.Error = evalErr.Error()
 		return out
 	}
 	if resp == nil || resp.Cell == nil {
 		out.Error = "eval_js returned no repl cell"
 		return out
 	}
-	resultText := resp.Cell.Execution.Result
+	if resultErr != nil {
+		out.Error = "eval_js result was not available: " + resultErr.Error()
+		return out
+	}
 	var envelope struct {
 		Result any `json:"result"`
 	}
-	if decodeErr := json.Unmarshal([]byte(resultText), &envelope); decodeErr != nil {
-		if unquoted, unquoteErr := strconv.Unquote(resultText); unquoteErr == nil {
-			if decodeErr = json.Unmarshal([]byte(unquoted), &envelope); decodeErr == nil {
-				out.Result = envelope.Result
-				return out
-			}
-		}
+	if decodeErr := json.Unmarshal([]byte(resultJSON), &envelope); decodeErr != nil {
 		out.Error = "eval_js result was not valid JSON: " + decodeErr.Error()
 		return out
 	}
