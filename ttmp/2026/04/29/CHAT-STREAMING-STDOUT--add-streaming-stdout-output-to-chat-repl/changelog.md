@@ -34,3 +34,12 @@ Uploaded the streaming stdout design and implementation guide to reMarkable and 
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/design-doc/01-streaming-stdout-output-design.md — Uploaded guide source
 
+
+## 2026-04-29
+
+Copied the Obsidian follow-up article into the ticket reference folder for local review and upload.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-STREAMING-STDOUT--add-streaming-stdout-output-to-chat-repl/reference/02-article-from-eval-js-to-persistent-agent-runtime.md — Ticket-local article copy
+
