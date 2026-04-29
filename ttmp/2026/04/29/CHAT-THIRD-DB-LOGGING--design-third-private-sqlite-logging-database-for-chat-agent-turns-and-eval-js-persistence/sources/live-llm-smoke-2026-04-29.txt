@@ -1,0 +1,84 @@
+# Live LLM smoke test evidence - 2026-04-29
+
+Profile: gpt-5-nano-low
+Command run in tmux:
+
+go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-log-live-fixed.sqlite --log-db-keep-temp 2>&1 | tee /tmp/chat-log-live-fixed-output.txt
+
+Prompts:
+
+1. Use eval_js to list the first three embedded help entries. Include their slugs and titles in your answer.
+2. Use eval_js to insert a note into outputDB with key live-smoke and value ok, then report outputDB.schema() and the matching note row.
+
+Important observed tool results:
+
+Prompt 1 tool result:
+{"result":[{"slug":"database-globals-api","title":"Database Globals API"},{"slug":"chat-repl-user-guide","title":"chat REPL User Guide"},{"slug":"eval-js-api","title":"eval_js Tool API"}]}
+
+Prompt 2 tool result:
+{"result":{"noteRow":{"key":"live-smoke","value":"ok"},"schemaInfo":{"Name":"outputDB","Readonly":false,"Tables":["notes"]}},"durationMs":3}
+
+Private log DB tables:
+
+binding_docs           chat_log_sessions      repldb_meta
+binding_versions       console_events         sessions
+bindings               eval_tool_calls        turn_block_membership
+blocks                 evaluations            turns
+
+Final counts after two prompts:
+
+chat_log_sessions|1
+turns|2
+blocks|13
+turn_block_membership|86
+sessions|1
+evaluations|2
+console_events|0
+bindings|3
+binding_versions|5
+binding_docs|0
+eval_tool_calls|2
+
+Session row:
+
+chat-1777472382730681746|chat-1777472382730681746:eval_js|conv-1777472382731323440|gpt-5-nano-low|0|1
+
+Eval correlation rows:
+
+1|1|{"result":[{"slug":"database-globals-api","title":"Database Globals API"},{"slug":"chat-repl-user-guide","title":"chat REPL User Guide"},{"slug":"eval-js-api","title":"eval_js Tool API"}]}|
+2|2|{"result":{"noteRow":{"key":"live-smoke","value":"ok"},"schemaInfo":{"Name":"outputDB","Readonly":false,"Tables":["notes"]}},"durationMs":3}|
+
+Turn phase counts:
+
+final|17
+post_inference|30
+post_tools|15
+pre_inference|24
+
+Block kind counts:
+
+llm_text|2
+reasoning|2
+system|1
+tool_call|4
+tool_use|2
+user|2
+
+Bug found and fixed during smoke test:
+
+The first live tmux run against /tmp/chat-log-live.sqlite failed because EvalTool decoded replsession.ExecutionReport.Result, which is a display preview and may be truncated with an ellipsis. The model saw errors such as:
+
+- eval_js result was not valid JSON: invalid character 'â' after object key:value pair
+- eval_js result was not valid JSON: unexpected end of JSON input
+
+Fix:
+
+- The eval wrapper now stores the exact JSON result in globalThis.__chat_eval_last_json.
+- After replapi.App.Evaluate returns, EvalTool reads that exact string with replapi.App.WithRuntime.
+- The fixed run against /tmp/chat-log-live-fixed.sqlite passed.
+
+Validation after fix:
+
+go test ./... -count=1
+
+Result: passed.

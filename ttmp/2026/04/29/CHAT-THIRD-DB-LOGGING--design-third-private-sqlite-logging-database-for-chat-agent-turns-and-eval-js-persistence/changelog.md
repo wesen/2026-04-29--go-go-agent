@@ -85,3 +85,23 @@ Completed task 14 final validation: go test ./... passed, docmgr doctor passed, 
 
 - /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/reference/01-investigation-diary.md — Final validation and reMarkable upload evidence
 
+
+## 2026-04-29
+
+Live LLM tmux smoke test found replsession preview truncation in eval_js result conversion; fixed EvalTool to read exact JSON from runtime global via replapi.WithRuntime, then verified inputDB, outputDB, turn store, repldb, and correlation rows.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go — Fix exact result extraction for replapi-backed eval_js
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt — Live tmux smoke evidence and DB counts
+
+
+## 2026-04-29
+
+Committed live smoke fix for exact replapi eval result extraction (commit 9a6ea2d9f2c06168c8779b2745e295ad4f48c94d); live tmux test verified inputDB, outputDB, private turn store, repldb, and correlation rows.
+
+### Related Files
+
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go — Exact JSON result extraction from live repl runtime
+- /home/manuel/code/wesen/2026-04-29--go-go-agent/ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt — Live tmux smoke evidence
+

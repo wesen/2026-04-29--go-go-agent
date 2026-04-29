@@ -13,16 +13,20 @@ DocType: reference
 Intent: long-term
 Owners: []
 RelatedFiles:
-    - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/logdb.go
-    - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/logdb/eval_tool.go
-    - /home/manuel/code/wesen/2026-04-29--go-go-agent/internal/evaljs/runtime.go
-    - /home/manuel/code/wesen/2026-04-29--go-go-agent/cmd/chat/main.go
+    - Path: cmd/chat/main.go
+    - Path: internal/evaljs/runtime.go
+    - Path: internal/logdb/eval_tool.go
+      Note: Live smoke fix for exact replapi result extraction
+    - Path: internal/logdb/logdb.go
+    - Path: ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt
+      Note: Sanitized live LLM smoke DB evidence
 ExternalSources: []
-Summary: "Chronological implementation diary for the private chat/eval_js logging database work."
+Summary: Chronological implementation diary for the private chat/eval_js logging database work.
 LastUpdated: 2026-04-29T09:54:36-04:00
-WhatFor: "Resume or review the private log DB implementation without losing context."
-WhenToUse: "Use before continuing CHAT-THIRD-DB-LOGGING implementation, validation, or review."
+WhatFor: Resume or review the private log DB implementation without losing context.
+WhenToUse: Use before continuing CHAT-THIRD-DB-LOGGING implementation, validation, or review.
 ---
+
 
 # Diary
 
@@ -406,3 +410,100 @@ This is the final documentation checkpoint for this turn. The code was committed
 - Documents present:
   - `Private logging database for chat agent turns and eval_js execution`
   - `CHAT THIRD DB LOGGING implementation bundle`
+
+## Step 7: Live LLM tmux smoke test and exact result extraction fix
+
+I ran the requested live LLM test inside tmux with profile `gpt-5-nano-low` and a persistent private log DB at `/tmp/chat-log-live.sqlite`. The first run successfully exercised the model/tool loop and wrote the private database, but it exposed a real bug: `EvalTool` was decoding `replsession.ExecutionReport.Result`, which is a display preview and can be truncated with a Unicode ellipsis. That made valid JavaScript results fail JSON decoding.
+
+I fixed the bug by changing the eval wrapper to assign the exact `JSON.stringify({ result })` string to `globalThis.__chat_eval_last_json`, then reading that exact runtime global after `replapi.App.Evaluate` via `replapi.App.WithRuntime`. After the fix, I reran the live test in tmux against `/tmp/chat-log-live-fixed.sqlite`; the model successfully listed embedded help entries, wrote/read `outputDB`, and the private DB contained turn snapshots, repldb eval rows, binding rows, and correlation rows.
+
+### Prompt Context
+
+**User prompt (verbatim):** "run a live llm test, verify all the dbs and stuff"
+
+**Assistant interpretation:** Run the chat command interactively in tmux with a live model, force tool use, inspect the resulting private SQLite database, and verify inputDB/outputDB/eval/turn persistence behavior.
+
+**Inferred user intent:** Validate that the implementation works end-to-end with a real LLM/tool loop, not just unit tests.
+
+**Commit (code):** 9a6ea2d9f2c06168c8779b2745e295ad4f48c94d — "Fix replapi eval result extraction"
+
+### What I did
+- Started `tmux` session `chat-logdb-live` and ran:
+  - `go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-log-live.sqlite --log-db-keep-temp 2>&1 | tee /tmp/chat-log-live-output.txt`
+- Sent a prompt asking the model to use `eval_js` to list the first three embedded help entries.
+- Observed JSON decode failures from the eval tool despite repldb recording eval rows.
+- Queried `/tmp/chat-log-live.sqlite` and confirmed tables/counts existed even in the failed run.
+- Fixed `internal/logdb/eval_tool.go` to read exact JSON from `globalThis.__chat_eval_last_json` through `ReplApp.WithRuntime`.
+- Ran `go test ./... -count=1` successfully.
+- Started `tmux` session `chat-logdb-live-fixed` and reran with:
+  - `go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-log-live-fixed.sqlite --log-db-keep-temp 2>&1 | tee /tmp/chat-log-live-fixed-output.txt`
+- Sent two prompts:
+  1. list first three help entries through `inputDB`,
+  2. insert/read `outputDB` note `live-smoke=ok`.
+- Queried `/tmp/chat-log-live-fixed.sqlite` for table names, row counts, sessions, eval rows, correlation rows, turn phases, block kinds, and tool blocks.
+- Saved sanitized evidence in `sources/live-llm-smoke-2026-04-29.txt`.
+
+### Why
+- Unit tests cannot prove the LLM will call the tool correctly or that Geppetto runner snapshots line up with real provider/tool-loop behavior.
+- The private DB design specifically needs evidence for turns, evals, correlation rows, and JS-visible DB behavior.
+
+### What worked
+- The fixed live run returned:
+  - `database-globals-api — Database Globals API`
+  - `chat-repl-user-guide — chat REPL User Guide`
+  - `eval-js-api — eval_js Tool API`
+- The second prompt inserted and read `outputDB` note `{key:"live-smoke", value:"ok"}`.
+- Private DB tables existed:
+  - `turns`, `blocks`, `turn_block_membership`
+  - `sessions`, `evaluations`, `console_events`, `bindings`, `binding_versions`, `binding_docs`
+  - `chat_log_sessions`, `eval_tool_calls`
+- Final fixed-run counts after two prompts:
+  - `chat_log_sessions|1`
+  - `turns|2`
+  - `blocks|13`
+  - `turn_block_membership|86`
+  - `sessions|1`
+  - `evaluations|2`
+  - `bindings|3`
+  - `binding_versions|5`
+  - `eval_tool_calls|2`
+- Turn phases were present:
+  - `pre_inference`, `post_inference`, `post_tools`, `final`.
+- Tool block kinds were present:
+  - `tool_call`, `tool_use`.
+
+### What didn't work
+- My first non-tmux attempt used a positional prompt with Cobra and failed:
+  - `Error: unknown command "Use eval_js ..." for "chat"`
+- The first tmux live run found the result conversion bug:
+  - `eval_js result was not valid JSON: invalid character 'â' after object key:value pair`
+  - `eval_js result was not valid JSON: unexpected end of JSON input`
+- Root cause: `replsession.ExecutionReport.Result` is a human/display preview and can be truncated with an ellipsis, so it is not a reliable structured transport.
+
+### What I learned
+- The design's earlier warning was correct: structured result conversion cannot depend on `ExecutionReport.Result`.
+- `replapi.WithRuntime` is the right bridge for retrieving exact host-convention values from the live repl session after persistence has happened.
+- The live runner stores multiple snapshot memberships per prompt, so membership counts are much larger than final turn counts.
+
+### What was tricky to build
+- The fix had to preserve replsession as the owner of evaluation/persistence while still extracting an exact machine-readable value. Setting a known global in the wrapper and reading it via `WithRuntime` keeps replsession in charge and avoids synthetic evaluation records.
+- Error paths must not read stale globals. The code now skips exact-result reads when `Evaluate` returns an eval error and checks for nil/undefined/null globals.
+
+### What warrants a second pair of eyes
+- Review whether `globalThis.__chat_eval_last_json` should be deleted before each eval to avoid stale values if a future error path does not clear it.
+- Review whether the known global name should be less collision-prone or stored in `Runtime.Values` instead.
+- Review whether `console_events|0` is acceptable for the second prompt; the evals did not emit `console.log`, so zero is expected in this smoke run.
+
+### What should be done in the future
+- Add a regression test that forces a long result large enough to trigger replsession preview truncation and proves `EvalTool` still returns the full structured value.
+- Optionally upload the live smoke evidence bundle to reMarkable.
+
+### Code review instructions
+- Start with `internal/logdb/eval_tool.go`, especially `buildEvalCellSource`, `readLastResultJSON`, and `convertReplResponseToEvalOutput`.
+- Review `sources/live-llm-smoke-2026-04-29.txt` for the live evidence.
+- Validate with `go test ./... -count=1` and optionally rerun the tmux smoke command.
+
+### Technical details
+- Fixed DB path: `/tmp/chat-log-live-fixed.sqlite`.
+- Fixed run tmux session: `chat-logdb-live-fixed`.
+- Evidence file: `ttmp/2026/04/29/CHAT-THIRD-DB-LOGGING--design-third-private-sqlite-logging-database-for-chat-agent-turns-and-eval-js-persistence/sources/live-llm-smoke-2026-04-29.txt`.
