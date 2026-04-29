@@ -1,0 +1,60 @@
+# Live REPL-cell eval_js smoke test - 2026-04-29
+
+Command run in tmux:
+
+```bash
+go run ./cmd/chat --profile gpt-5-nano-low --log-db /tmp/chat-replcell.sqlite --log-db-keep-temp --stream 2>&1 | tee /tmp/chat-replcell-output.txt
+```
+
+Prompt:
+
+```text
+Use eval_js twice. First define a function titleOf(row) that returns row.title, with titleOf as the final expression. Second query SELECT title FROM docs ORDER BY slug LIMIT 1 and call titleOf(rows[0]) as the final expression. Do not use return.
+```
+
+Observed stream:
+
+```text
+[tool eval_js call call_6PZBzh93czxe6Z2vGiXJxRKE]
+code:
+var titleOf = function(row) { return row.title; }
+[tool eval_js running call_6PZBzh93czxe6Z2vGiXJxRKE]
+[tool eval_js done call_6PZBzh93czxe6Z2vGiXJxRKE]
+result:
+{}
+
+[tool eval_js call call_UL3pFnLKBStbIXfdaIWVAUrE]
+code:
+const rows = inputDB.query("SELECT title FROM docs ORDER BY slug LIMIT 1"); titleOf(rows[0]);
+[tool eval_js running call_UL3pFnLKBStbIXfdaIWVAUrE]
+[tool eval_js done call_UL3pFnLKBStbIXfdaIWVAUrE]
+result:
+{
+  "result": "chat REPL User Guide"
+}
+
+assistant: The result of the second query is: chat REPL User Guide
+```
+
+DB verification:
+
+```bash
+sqlite3 /tmp/chat-replcell.sqlite "SELECT 'turns', COUNT(*) FROM turns UNION ALL SELECT 'evaluations', COUNT(*) FROM evaluations UNION ALL SELECT 'eval_tool_calls', COUNT(*) FROM eval_tool_calls; SELECT repl_cell_id, error_text FROM eval_tool_calls ORDER BY repl_cell_id;"
+```
+
+Output:
+
+```text
+turns|1
+evaluations|2
+eval_tool_calls|2
+1|
+2|
+```
+
+Notes:
+
+- The first eval_js call defined `titleOf` in one REPL cell.
+- The second eval_js call reused `titleOf` in a separate REPL cell.
+- The second call returned the expected final expression value.
+- The first call's final value was a function, which JSON.stringify omits from the `{ result: ... }` envelope, producing `{}` in the stream. This is acceptable for the smoke test but may deserve friendlier metadata later.
